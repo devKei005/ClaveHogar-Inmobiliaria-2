@@ -85,6 +85,10 @@ import {
   WorkspaceSubView,
   isAgentConfirmedOnProperty,
 } from './components/RoleWorkspaceView';
+import {
+  buildFlexibleSmartSearch,
+  normalizeSearchText,
+} from './utils/smartSearchEngine';
 
 type MainSection = 'catalogo' | 'buscador_ia' | 'comparador' | 'panel_rol';
 
@@ -166,6 +170,12 @@ export default function App() {
   const [aiQuery, setAiQuery] = useState('');
   const [aiLoading, setAiLoading] = useState(false);
   const [aiResult, setAiResult] = useState<AISmartSearchResponse | null>(null);
+
+  // Limpiar los inputs de búsqueda automáticamente al cambiar de sección para que no quede texto viejo sin limpiar
+  useEffect(() => {
+    setAiQuery('');
+    setSearchQuery('');
+  }, [activeSection]);
 
   // Per-user favorites and per-user comparator
   const favoriteIds = useMemo(() => {
@@ -543,13 +553,29 @@ export default function App() {
           if (!hasAll) return false;
         }
         if (searchQuery.trim()) {
-          const q = searchQuery.toLowerCase();
+          const qNorm = normalizeSearchText(searchQuery);
+          const propNorm = normalizeSearchText(
+            `${p.title} ${p.location} ${p.address} ${p.description} ${p.propertyType}`
+          );
+          const asksCabaSynonyms =
+            qNorm.includes('ciudad de buenos aires') ||
+            qNorm.includes('capital federal') ||
+            qNorm === 'caba' ||
+            qNorm === 'capital';
+          const isPropCaba =
+            propNorm.includes('caba') ||
+            propNorm.includes('ciudad de buenos aires') ||
+            propNorm.includes('capital federal') ||
+            propNorm.includes('palermo') ||
+            propNorm.includes('belgrano') ||
+            propNorm.includes('recoleta') ||
+            propNorm.includes('colegiales') ||
+            propNorm.includes('puerto madero') ||
+            propNorm.includes('nunez') ||
+            propNorm.includes('caballito');
+
           const matchText =
-            p.title.toLowerCase().includes(q) ||
-            p.location.toLowerCase().includes(q) ||
-            p.address.toLowerCase().includes(q) ||
-            p.description.toLowerCase().includes(q) ||
-            p.propertyType.toLowerCase().includes(q);
+            propNorm.includes(qNorm) || (asksCabaSynonyms && isPropCaba);
           if (!matchText) return false;
         }
         return true;
@@ -1848,7 +1874,7 @@ export default function App() {
   };
 
   // ============================================================================
-  // AI SMART SEARCH HANDLER
+  // AI SMART SEARCH HANDLER (Server API + Flexible Engine for CABA/GBA & Price Ranges)
   // ============================================================================
   const handleRunAISearch = async (e?: React.FormEvent, customPrompt?: string) => {
     if (e) e.preventDefault();
@@ -1860,19 +1886,75 @@ export default function App() {
 
     setAiLoading(true);
     setActiveSection('buscador_ia');
+    // Limpiamos el input al ejecutar la búsqueda para que no quede el texto viejo cargado al terminar o cambiar de sección
+    setAiQuery('');
+
     try {
-      const response = await fetch('/api/ai/smart-search', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          query: promptToRun,
-          properties: approvedProperties,
-        }),
-      });
-      if (!response.ok) {
-        throw new Error('Error en la respuesta del buscador inteligente');
+      const flexibleLocalResult = buildFlexibleSmartSearch(
+        promptToRun,
+        approvedProperties
+      ) as AISmartSearchResponse;
+
+      let data: AISmartSearchResponse | null = null;
+      try {
+        const response = await fetch('/api/ai/smart-search', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            query: promptToRun,
+            properties: approvedProperties,
+          }),
+        });
+        const contentType = response.headers.get('content-type') || '';
+        if (response.ok && contentType.includes('application/json')) {
+          const serverData = (await response.json()) as AISmartSearchResponse;
+          if (serverData && serverData.interpretedPreferences && Array.isArray(serverData.recommendations)) {
+            const mergedMap = new Map<string, AISmartSearchResponse['recommendations'][number]>();
+            for (const r of serverData.recommendations) {
+              if (r && r.propertyId) mergedMap.set(r.propertyId, r);
+            }
+            for (const localRec of flexibleLocalResult.recommendations) {
+              const existing = mergedMap.get(localRec.propertyId);
+              if (!existing || localRec.matchScore > existing.matchScore) {
+                mergedMap.set(localRec.propertyId, localRec);
+              }
+            }
+            const mergedRecs = Array.from(mergedMap.values()).sort(
+              (a, b) => b.matchScore - a.matchScore
+            );
+
+            data = {
+              interpretedPreferences: {
+                ...serverData.interpretedPreferences,
+                summary:
+                  flexibleLocalResult.interpretedPreferences.maxPrice > 0
+                    ? flexibleLocalResult.interpretedPreferences.summary
+                    : serverData.interpretedPreferences.summary ||
+                      flexibleLocalResult.interpretedPreferences.summary,
+                maxPrice:
+                  flexibleLocalResult.interpretedPreferences.maxPrice > 0
+                    ? flexibleLocalResult.interpretedPreferences.maxPrice
+                    : serverData.interpretedPreferences.maxPrice || 0,
+                preferredLocations:
+                  flexibleLocalResult.interpretedPreferences.preferredLocations.length > 0 &&
+                  !flexibleLocalResult.interpretedPreferences.preferredLocations[0]
+                    .toLowerCase()
+                    .includes('todas las zonas')
+                    ? flexibleLocalResult.interpretedPreferences.preferredLocations
+                    : serverData.interpretedPreferences.preferredLocations,
+              },
+              recommendations: mergedRecs,
+            };
+          }
+        }
+      } catch {
+        // Si en Vercel u otro hosting estático no responde el endpoint, usamos el motor flexible local
       }
-      const data = (await response.json()) as AISmartSearchResponse;
+
+      if (!data) {
+        data = flexibleLocalResult;
+      }
+
       setAiResult(data);
       if (data.recommendations.length > 0) {
         notify(
@@ -1889,9 +1971,6 @@ export default function App() {
           'No se encontraron propiedades que cumplan todos esos criterios. Probá ajustando tu búsqueda.'
         );
       }
-    } catch (err) {
-      console.error(err);
-      notify('error', 'Error al ejecutar la búsqueda con IA', 'Intentá nuevamente en unos segundos.');
     } finally {
       setAiLoading(false);
     }
