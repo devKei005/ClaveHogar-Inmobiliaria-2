@@ -12,6 +12,8 @@ import {
   ArrowRight,
   LogOut,
   User,
+  Sparkles,
+  Edit3,
 } from 'lucide-react';
 import {
   onAuthStateChanged,
@@ -85,6 +87,7 @@ import {
   WorkspaceSubView,
   isAgentConfirmedOnProperty,
 } from './components/RoleWorkspaceView';
+import { canUserEditProperty } from './utils/propertyPermissions';
 import {
   buildFlexibleSmartSearch,
   normalizeSearchText,
@@ -302,34 +305,73 @@ export default function App() {
       (snap) => {
         if (!mounted || snap.empty) return;
         const storedAvatars = getStoredAvatars();
-        const list = snap.docs.map((d) => {
-          const u = d.data() as UserProfile;
+        const userMap = new Map<string, UserProfile>();
+
+        // 1. Cargamos primero los usuarios reales guardados en Firestore
+        snap.docs.forEach((d) => {
+          const raw = d.data() as Partial<UserProfile>;
+          const uid = raw.uid || d.id;
+          const email = (raw.email || '').trim().toLowerCase();
           const cachedPhoto =
-            storedAvatars[u.uid] ?? storedAvatars[u.email.toLowerCase()];
-          return {
-            ...u,
-            photoUrl: u.photoUrl || cachedPhoto || '',
+            storedAvatars[uid] ?? (email ? storedAvatars[email] : '');
+
+          const profile: UserProfile = {
+            uid,
+            displayName: raw.displayName || (email ? email.split('@')[0] : 'Usuario'),
+            email: raw.email ? raw.email.trim() : `${uid}@clavehogar.com`,
+            phone: raw.phone || '+54 9 11 4000-0000',
+            address: raw.address || 'Buenos Aires, Argentina',
+            dni: raw.dni || '',
+            role: (raw.role as UserRole) || 'cliente',
+            isAlsoOwner: Boolean(raw.isAlsoOwner),
+            active: raw.active !== false,
+            agencyName: raw.agencyName || '',
+            bio: raw.bio || '',
+            photoUrl: raw.photoUrl || cachedPhoto || '',
           };
+
+          if (email) userMap.set(`email:${email}`, profile);
+          if (uid) userMap.set(`uid:${uid}`, profile);
         });
-        // Ensure all 4 official @clavehogar.com accounts are always present in users list
-        const merged = [...list];
+
+        // 2. Solo incorporamos las cuentas demo oficiales si NI su email NI su UID existen en Firestore
         for (const demoUser of INITIAL_USERS) {
-          if (!merged.some((u) => u.email.toLowerCase() === demoUser.email.toLowerCase())) {
+          const demoEmail = demoUser.email.trim().toLowerCase();
+          const demoUid = demoUser.uid;
+          if (!userMap.has(`email:${demoEmail}`) && !userMap.has(`uid:${demoUid}`)) {
             const cachedPhoto =
-              storedAvatars[demoUser.uid] ??
-              storedAvatars[demoUser.email.toLowerCase()];
-            merged.push({
+              storedAvatars[demoUid] ?? storedAvatars[demoEmail];
+            const profile: UserProfile = {
               ...demoUser,
+              email: demoUser.email.trim(),
               photoUrl: demoUser.photoUrl || cachedPhoto || '',
-            });
+            };
+            userMap.set(`email:${demoEmail}`, profile);
+            userMap.set(`uid:${demoUid}`, profile);
           }
         }
-        setUsers(merged);
+
+        // 3. Extraemos la lista final deduplicada sin repetir ni por email ni por UID
+        const seenEmails = new Set<string>();
+        const seenUids = new Set<string>();
+        const uniqueList: UserProfile[] = [];
+
+        userMap.forEach((user) => {
+          const emailNorm = (user.email || '').trim().toLowerCase();
+          const uid = user.uid || '';
+          if (emailNorm && seenEmails.has(emailNorm)) return;
+          if (uid && seenUids.has(uid)) return;
+          if (emailNorm) seenEmails.add(emailNorm);
+          if (uid) seenUids.add(uid);
+          uniqueList.push(user);
+        });
+
+        setUsers(uniqueList);
         setCurrentUser((prev) => {
           if (!prev) return null;
           const updated =
-            merged.find((u) => u.uid === prev.uid) ||
-            merged.find((u) => u.email.toLowerCase() === prev.email.toLowerCase());
+            uniqueList.find((u) => u.uid === prev.uid) ||
+            uniqueList.find((u) => u.email.toLowerCase() === prev.email.toLowerCase());
           if (!updated) return prev;
           return {
             ...updated,
@@ -527,6 +569,13 @@ export default function App() {
     const fresh = properties.find((p) => p.id === selectedProperty.id);
     if (fresh) setSelectedProperty(fresh);
   }, [properties, selectedProperty]);
+
+  // Al navegar al Catálogo, nos aseguramos de que el input de búsqueda de texto esté limpio
+  useEffect(() => {
+    if (activeSection === 'catalogo') {
+      setSearchQuery('');
+    }
+  }, [activeSection]);
 
   // Derived Catalog Lists
   const activePropertyTypes = useMemo(
@@ -976,7 +1025,9 @@ export default function App() {
     if (!currentUser) return;
     const isEdit = Boolean(existingId);
     const propId = existingId ? sanitizeId(existingId) : sanitizeId(`prop_${Date.now()}`);
-    const existingProp = properties.find((p) => p.id === propId);
+    const existingProp =
+      properties.find((p) => p.id === propId || (existingId && p.id === existingId)) ||
+      editingProperty;
 
     // Verificar permisos estrictos de edición: solo el propietario dueño, el agente confirmado a cargo, o el administrador
     if (isEdit && existingProp) {
@@ -994,9 +1045,10 @@ export default function App() {
       }
     }
 
-    // Las nuevas publicaciones de propietarios quedan pendientes de revisión del administrador
+    // Las nuevas publicaciones de propietarios quedan pendientes de revisión del administrador.
+    // Si es edición de una publicación ya aprobada, se mantiene aprobada para reflejar los cambios en el catálogo de inmediato.
     const publicationStatus: PublicationStatus = isEdit
-      ? existingProp?.publicationStatus || 'pendiente'
+      ? existingProp?.publicationStatus || 'aprobada'
       : currentUser.role === 'administrador'
       ? 'aprobada'
       : 'pendiente';
@@ -1004,29 +1056,32 @@ export default function App() {
     const newProp: PropertyItem = {
       ...data,
       id: propId,
-      ownerId: existingProp?.ownerId || currentUser.uid,
-      ownerName: existingProp?.ownerName || currentUser.displayName,
-      agentId: data.agentId ?? existingProp?.agentId ?? '',
-      agentName: data.agentName ?? existingProp?.agentName ?? '',
+      ownerId: existingProp?.ownerId || (editingProperty?.ownerId ?? currentUser.uid),
+      ownerName: existingProp?.ownerName || (editingProperty?.ownerName ?? currentUser.displayName),
+      agentId: data.agentId || existingProp?.agentId || (editingProperty?.agentId ?? ''),
+      agentName: data.agentName || existingProp?.agentName || (editingProperty?.agentName ?? ''),
       managementMode: data.managementMode || existingProp?.managementMode || 'directa',
       agentRequestType: data.agentRequestType || existingProp?.agentRequestType || 'ninguna',
       agentAssignmentStatus:
         data.agentAssignmentStatus || existingProp?.agentAssignmentStatus || 'sin_agente',
-      requestedAgentId: data.requestedAgentId ?? existingProp?.requestedAgentId ?? '',
-      requestedAgentName: data.requestedAgentName ?? existingProp?.requestedAgentName ?? '',
-      agentRejectionReason: data.agentRejectionReason ?? existingProp?.agentRejectionReason ?? '',
+      requestedAgentId: data.requestedAgentId || existingProp?.requestedAgentId || '',
+      requestedAgentName: data.requestedAgentName || existingProp?.requestedAgentName || '',
+      agentRejectionReason: data.agentRejectionReason || existingProp?.agentRejectionReason || '',
       publicationStatus,
-      createdAtIso: existingProp?.createdAtIso || new Date().toISOString(),
+      createdAtIso: existingProp?.createdAtIso || (editingProperty?.createdAtIso ?? new Date().toISOString()),
     };
 
     try {
       await setDoc(doc(db, 'properties', propId), newProp);
-      // Actualizar estado deduplicando por id para que NUNCA aparezca duplicada
+      // Actualizar estado deduplicando por id para que NUNCA aparezca duplicada y se actualice al instante en el catálogo y en Mi Espacio
       setProperties((prev) =>
-        prev.some((p) => p.id === propId)
-          ? prev.map((p) => (p.id === propId ? newProp : p))
+        prev.some((p) => p.id === propId || (existingId && p.id === existingId))
+          ? prev.map((p) => (p.id === propId || (existingId && p.id === existingId) ? newProp : p))
           : [newProp, ...prev]
       );
+      if (selectedProperty && (selectedProperty.id === propId || selectedProperty.id === existingId)) {
+        setSelectedProperty(newProp);
+      }
 
       // Notificaciones según solicitud de agente y moderación
       const adminUser =
@@ -1886,8 +1941,8 @@ export default function App() {
 
     setAiLoading(true);
     setActiveSection('buscador_ia');
-    // Limpiamos el input al ejecutar la búsqueda para que no quede el texto viejo cargado al terminar o cambiar de sección
-    setAiQuery('');
+    // Mantenemos visible en el input lo que se buscó para que el usuario pueda ver su consulta y editarla
+    setAiQuery(promptToRun);
 
     try {
       const flexibleLocalResult = buildFlexibleSmartSearch(
@@ -1895,7 +1950,17 @@ export default function App() {
         approvedProperties
       ) as AISmartSearchResponse;
 
+      // Respuesta instantánea (<1ms) para saludos, chistes, consultas fuera de tema o pedidos de aclaración
+      if (flexibleLocalResult.isOffTopic || flexibleLocalResult.needsClarification) {
+        setAiResult(flexibleLocalResult);
+        setAiLoading(false);
+        return;
+      }
+
       let data: AISmartSearchResponse | null = null;
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 3500);
+
       try {
         const response = await fetch('/api/ai/smart-search', {
           method: 'POST',
@@ -1904,51 +1969,86 @@ export default function App() {
             query: promptToRun,
             properties: approvedProperties,
           }),
+          signal: controller.signal,
         });
+        clearTimeout(timeoutId);
         const contentType = response.headers.get('content-type') || '';
         if (response.ok && contentType.includes('application/json')) {
           const serverData = (await response.json()) as AISmartSearchResponse;
           if (serverData && serverData.interpretedPreferences && Array.isArray(serverData.recommendations)) {
-            const mergedMap = new Map<string, AISmartSearchResponse['recommendations'][number]>();
-            for (const r of serverData.recommendations) {
-              if (r && r.propertyId) mergedMap.set(r.propertyId, r);
-            }
-            for (const localRec of flexibleLocalResult.recommendations) {
-              const existing = mergedMap.get(localRec.propertyId);
-              if (!existing || localRec.matchScore > existing.matchScore) {
-                mergedMap.set(localRec.propertyId, localRec);
-              }
-            }
-            const mergedRecs = Array.from(mergedMap.values()).sort(
-              (a, b) => b.matchScore - a.matchScore
+            const isOffTopic = Boolean(serverData.isOffTopic || flexibleLocalResult.isOffTopic);
+            const needsClarification = Boolean(
+              serverData.needsClarification || flexibleLocalResult.needsClarification
             );
 
-            data = {
-              interpretedPreferences: {
-                ...serverData.interpretedPreferences,
-                summary:
-                  flexibleLocalResult.interpretedPreferences.maxPrice > 0
-                    ? flexibleLocalResult.interpretedPreferences.summary
-                    : serverData.interpretedPreferences.summary ||
-                      flexibleLocalResult.interpretedPreferences.summary,
-                maxPrice:
-                  flexibleLocalResult.interpretedPreferences.maxPrice > 0
-                    ? flexibleLocalResult.interpretedPreferences.maxPrice
-                    : serverData.interpretedPreferences.maxPrice || 0,
-                preferredLocations:
-                  flexibleLocalResult.interpretedPreferences.preferredLocations.length > 0 &&
-                  !flexibleLocalResult.interpretedPreferences.preferredLocations[0]
-                    .toLowerCase()
-                    .includes('todas las zonas')
-                    ? flexibleLocalResult.interpretedPreferences.preferredLocations
-                    : serverData.interpretedPreferences.preferredLocations,
-              },
-              recommendations: mergedRecs,
-            };
+            if (isOffTopic || needsClarification) {
+              data = {
+                ...serverData,
+                recommendations: [],
+                isOffTopic,
+                needsClarification,
+                assistantMessage:
+                  serverData.assistantMessage || flexibleLocalResult.assistantMessage,
+              };
+            } else {
+              const mergedMap = new Map<string, AISmartSearchResponse['recommendations'][number]>();
+              for (const r of serverData.recommendations) {
+                if (r && r.propertyId && (r.matchScore || 0) >= 55) {
+                  mergedMap.set(r.propertyId, r);
+                }
+              }
+              for (const localRec of flexibleLocalResult.recommendations) {
+                if (localRec && (localRec.matchScore || 0) >= 55) {
+                  const existing = mergedMap.get(localRec.propertyId);
+                  if (!existing || localRec.matchScore > existing.matchScore) {
+                    mergedMap.set(localRec.propertyId, localRec);
+                  }
+                }
+              }
+              const mergedRecs = Array.from(mergedMap.values()).sort(
+                (a, b) => b.matchScore - a.matchScore
+              );
+
+              const assistantMessage =
+                serverData.assistantMessage ||
+                flexibleLocalResult.assistantMessage ||
+                (mergedRecs.length > 0
+                  ? `Encontré ${mergedRecs.length} ${
+                      mergedRecs.length === 1 ? 'inmueble disponible' : 'inmuebles disponibles'
+                    } en el catálogo que coinciden con tu búsqueda.`
+                  : 'No hay inmuebles que coincidan con esos criterios. Probá ampliar la zona o el rango de precio.');
+
+              data = {
+                assistantMessage,
+                isOffTopic: false,
+                needsClarification: false,
+                interpretedPreferences: {
+                  ...serverData.interpretedPreferences,
+                  summary:
+                    flexibleLocalResult.interpretedPreferences.maxPrice > 0
+                      ? flexibleLocalResult.interpretedPreferences.summary
+                      : serverData.interpretedPreferences.summary ||
+                        flexibleLocalResult.interpretedPreferences.summary,
+                  maxPrice:
+                    flexibleLocalResult.interpretedPreferences.maxPrice > 0
+                      ? flexibleLocalResult.interpretedPreferences.maxPrice
+                      : serverData.interpretedPreferences.maxPrice || 0,
+                  preferredLocations:
+                    flexibleLocalResult.interpretedPreferences.preferredLocations.length > 0 &&
+                    !flexibleLocalResult.interpretedPreferences.preferredLocations[0]
+                      .toLowerCase()
+                      .includes('todas las zonas')
+                      ? flexibleLocalResult.interpretedPreferences.preferredLocations
+                      : serverData.interpretedPreferences.preferredLocations,
+                },
+                recommendations: mergedRecs,
+              };
+            }
           }
         }
       } catch {
-        // Si en Vercel u otro hosting estático no responde el endpoint, usamos el motor flexible local
+        // Si el endpoint tarda o está en hosting estático, usamos inmediatamente el motor flexible local
+        clearTimeout(timeoutId);
       }
 
       if (!data) {
@@ -2233,7 +2333,7 @@ export default function App() {
                 ClaveHogar
               </span>
               <span className="text-[10px] uppercase tracking-[0.22em] text-[#B86F52] block mt-1">
-                Arquitectura &amp; Propiedades
+                Alquileres &amp; Ventas
               </span>
             </button>
           </div>
@@ -2260,7 +2360,7 @@ export default function App() {
                   : 'border-transparent text-[#39483A]/70 hover:text-[#39483A]'
               }`}
             >
-              Buscador IA
+              Buscador
             </button>
             <button
               type="button"
@@ -2762,13 +2862,27 @@ export default function App() {
                           {heroFeaturedProperty.title}
                         </h3>
                       </div>
-                      <div className="sm:text-right shrink-0">
+                      <div className="sm:text-right shrink-0 flex flex-col items-start sm:items-end gap-1">
                         <span className="text-xl font-semibold font-tabular text-[#39483A] block">
                           {heroFeaturedProperty.currency} {heroFeaturedProperty.price.toLocaleString()}
                         </span>
                         <span className="text-xs text-[#39483A]/75 font-tabular">
                           {heroFeaturedProperty.bedrooms} dorm. · {heroFeaturedProperty.surface} m²
                         </span>
+                        {canUserEditProperty(heroFeaturedProperty, currentUser) && (
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setEditingProperty(heroFeaturedProperty);
+                              setIsPropertyFormOpen(true);
+                            }}
+                            className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-bold bg-[#B86F52] text-[#FCFBF7] rounded-sm hover:bg-[#a35e42] transition-colors mt-1 cursor-pointer"
+                          >
+                            <Edit3 className="w-3 h-3" />
+                            Editar Ficha
+                          </button>
+                        )}
                       </div>
                     </div>
                   </div>
@@ -3109,14 +3223,40 @@ export default function App() {
                             </span>
                           </div>
 
-                          <button
-                            type="button"
-                            onClick={() => setSelectedProperty(prop)}
-                            className="w-full py-2.5 px-4 text-xs uppercase tracking-widest font-semibold text-[#39483A] bg-[#F5F1E8] hover:bg-[#39483A] hover:text-[#FCFBF7] border border-[#D8C7AA] rounded-sm transition-colors flex items-center justify-center gap-2"
-                          >
-                            Ver Propiedad
-                            <ArrowRight className="w-3.5 h-3.5" />
-                          </button>
+                          {canUserEditProperty(prop, currentUser) ? (
+                            <div className="flex items-center gap-2">
+                              <button
+                                type="button"
+                                onClick={() => setSelectedProperty(prop)}
+                                className="flex-1 py-2 px-3 text-xs uppercase tracking-wider font-semibold text-[#39483A] bg-[#F5F1E8] hover:bg-[#39483A] hover:text-[#FCFBF7] border border-[#D8C7AA] rounded-sm transition-colors flex items-center justify-center gap-1.5 cursor-pointer"
+                              >
+                                Ver
+                                <ArrowRight className="w-3.5 h-3.5" />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setEditingProperty(prop);
+                                  setIsPropertyFormOpen(true);
+                                }}
+                                className="flex-1 py-2 px-3 text-xs uppercase tracking-wider font-bold text-[#FCFBF7] bg-[#B86F52] hover:bg-[#a35e42] rounded-sm transition-colors flex items-center justify-center gap-1.5 cursor-pointer shadow-sm"
+                                title="Editar ficha de esta propiedad"
+                              >
+                                <Edit3 className="w-3.5 h-3.5" />
+                                Editar Ficha
+                              </button>
+                            </div>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => setSelectedProperty(prop)}
+                              className="w-full py-2.5 px-4 text-xs uppercase tracking-widest font-semibold text-[#39483A] bg-[#F5F1E8] hover:bg-[#39483A] hover:text-[#FCFBF7] border border-[#D8C7AA] rounded-sm transition-colors flex items-center justify-center gap-2 cursor-pointer"
+                            >
+                              Ver Propiedad
+                              <ArrowRight className="w-3.5 h-3.5" />
+                            </button>
+                          )}
                         </div>
                       </article>
                     );
@@ -3138,7 +3278,7 @@ export default function App() {
                   Asesoramiento Inteligente
                 </span>
                 <h1 className="text-3xl sm:text-4xl font-serif-display font-semibold text-[#39483A]">
-                  Buscador de Propiedades en Lenguaje Natural
+                  Buscador de Propiedades 
                 </h1>
                 <p className="text-sm text-[#1F241F]/80 leading-relaxed">
                   Describí qué tipo de propiedad buscás (ubicación, dormitorios, jardín o pileta, presupuesto máximo y operación). El sistema interpreta tu pedido y selecciona los inmuebles reales almacenados en Firestore.
@@ -3191,56 +3331,97 @@ export default function App() {
 
             {!aiLoading && aiResult && (
               <div className="space-y-8 animate-fade-slide">
-                <div className="bg-[#FCFBF7] border border-[#D8C7AA] rounded-sm p-6 space-y-4">
-                  <div className="flex items-center justify-between border-b border-[#D8C7AA] pb-3">
-                    <h2 className="text-xl font-serif-display font-semibold text-[#39483A]">
-                      Síntesis de Búsqueda
-                    </h2>
-                    <span className="text-xs font-semibold text-[#B86F52]">
-                      {aiResult.recommendations.length} coincidencias encontradas
-                    </span>
-                  </div>
-                  <p className="text-sm text-[#1F241F]/85">{aiResult.interpretedPreferences.summary}</p>
-                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
-                    <div className="p-3 rounded-sm bg-[#F5F1E8] border border-[#D8C7AA]">
-                      <span className="text-[#39483A]/70 block">Operación</span>
-                      <strong className="text-[#1F241F] capitalize">
-                        {aiResult.interpretedPreferences.operationType}
-                      </strong>
+                {/* Cuadro de Respuesta del Asistente Virtual ClaveHogar */}
+                {aiResult.assistantMessage && (
+                  <div
+                    className={`rounded-sm p-6 border-2 flex items-start gap-4 transition-all ${
+                      aiResult.isOffTopic
+                        ? 'bg-amber-50/90 border-amber-400'
+                        : aiResult.needsClarification
+                        ? 'bg-blue-50/90 border-blue-400'
+                        : 'bg-[#F5F1E8] border-[#39483A]'
+                    }`}
+                  >
+                    <div className="w-10 h-10 rounded-full bg-[#39483A] text-[#FCFBF7] flex items-center justify-center shrink-0 mt-0.5 shadow-xs">
+                      <Sparkles className="w-5 h-5 text-[#D8C7AA]" />
                     </div>
-                    <div className="p-3 rounded-sm bg-[#F5F1E8] border border-[#D8C7AA]">
-                      <span className="text-[#39483A]/70 block">Zonas</span>
-                      <strong className="text-[#1F241F]">
-                        {aiResult.interpretedPreferences.preferredLocations.join(', ')}
-                      </strong>
-                    </div>
-                    <div className="p-3 rounded-sm bg-[#F5F1E8] border border-[#D8C7AA]">
-                      <span className="text-[#39483A]/70 block">Presupuesto máximo</span>
-                      <strong className="text-[#1F241F] font-tabular">
-                        {aiResult.interpretedPreferences.maxPrice > 0
-                          ? `USD ${aiResult.interpretedPreferences.maxPrice.toLocaleString()}`
-                          : 'Flexible'}
-                      </strong>
-                    </div>
-                    <div className="p-3 rounded-sm bg-[#F5F1E8] border border-[#D8C7AA]">
-                      <span className="text-[#39483A]/70 block">Atributos buscados</span>
-                      <strong className="text-[#1F241F]">
-                        {aiResult.interpretedPreferences.keyFeatures.join(', ')}
-                      </strong>
+                    <div className="space-y-1.5 flex-1">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="text-[11px] uppercase tracking-wider font-bold text-[#39483A]">
+                          Asistente Virtual de Búsqueda Inmobiliaria
+                        </span>
+                        {aiResult.isOffTopic && (
+                          <span className="text-[10px] uppercase font-bold bg-amber-200 text-amber-900 px-2 py-0.5 rounded-sm border border-amber-400">
+                            Consulta fuera del catálogo
+                          </span>
+                        )}
+                        {aiResult.needsClarification && (
+                          <span className="text-[10px] uppercase font-bold bg-blue-200 text-blue-900 px-2 py-0.5 rounded-sm border border-blue-400">
+                            Aclaración requerida
+                          </span>
+                        )}
+                      </div>
+                      <p className="text-base text-[#1F241F] font-medium leading-relaxed">
+                        {aiResult.assistantMessage}
+                      </p>
                     </div>
                   </div>
-                </div>
+                )}
 
-                {aiResult.recommendations.length === 0 ? (
+                {!aiResult.isOffTopic && !aiResult.needsClarification && (
+                  <div className="bg-[#FCFBF7] border border-[#D8C7AA] rounded-sm p-6 space-y-4">
+                    <div className="flex items-center justify-between border-b border-[#D8C7AA] pb-3">
+                      <h2 className="text-xl font-serif-display font-semibold text-[#39483A]">
+                        Síntesis de Búsqueda
+                      </h2>
+                      <span className="text-xs font-semibold text-[#B86F52]">
+                        {aiResult.recommendations.length} coincidencias encontradas
+                      </span>
+                    </div>
+                    <p className="text-sm text-[#1F241F]/85">{aiResult.interpretedPreferences.summary}</p>
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
+                      <div className="p-3 rounded-sm bg-[#F5F1E8] border border-[#D8C7AA]">
+                        <span className="text-[#39483A]/70 block">Operación</span>
+                        <strong className="text-[#1F241F] capitalize">
+                          {aiResult.interpretedPreferences.operationType}
+                        </strong>
+                      </div>
+                      <div className="p-3 rounded-sm bg-[#F5F1E8] border border-[#D8C7AA]">
+                        <span className="text-[#39483A]/70 block">Zonas</span>
+                        <strong className="text-[#1F241F]">
+                          {aiResult.interpretedPreferences.preferredLocations.join(', ')}
+                        </strong>
+                      </div>
+                      <div className="p-3 rounded-sm bg-[#F5F1E8] border border-[#D8C7AA]">
+                        <span className="text-[#39483A]/70 block">Presupuesto máximo</span>
+                        <strong className="text-[#1F241F] font-tabular">
+                          {aiResult.interpretedPreferences.maxPrice > 0
+                            ? `USD ${aiResult.interpretedPreferences.maxPrice.toLocaleString()}`
+                            : 'Flexible'}
+                        </strong>
+                      </div>
+                      <div className="p-3 rounded-sm bg-[#F5F1E8] border border-[#D8C7AA]">
+                        <span className="text-[#39483A]/70 block">Atributos buscados</span>
+                        <strong className="text-[#1F241F]">
+                          {aiResult.interpretedPreferences.keyFeatures.join(', ')}
+                        </strong>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {aiResult.recommendations.length === 0 && !aiResult.isOffTopic && !aiResult.needsClarification ? (
                   <div className="bg-[#F5F1E8] border border-[#D8C7AA] rounded-sm p-10 text-center space-y-3">
                     <h3 className="text-2xl font-serif-display font-semibold text-[#39483A]">
                       No encontramos propiedades que coincidan con todos esos requisitos
                     </h3>
                     <p className="text-sm text-[#39483A]/80 max-w-lg mx-auto">
-                      Ninguna de las propiedades activas en Firestore cumple simultáneamente con la zona, presupuesto o comodidades solicitadas. Probá ampliando el rango de búsqueda.
+                      Ninguna de las propiedades activas en Firestore cumple simultáneamente con la zona, presupuesto o comodidades solicitadas. Probá ampliando el rango de búsqueda o ajustando los filtros.
                     </p>
                   </div>
-                ) : (
+                ) : null}
+
+                {aiResult.recommendations.length > 0 && (
                   <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
                     {aiResult.recommendations.map((rec) => {
                       const prop = properties.find((p) => p.id === rec.propertyId);
@@ -3382,6 +3563,11 @@ export default function App() {
           }
           inquiries={inquiries}
           onClose={() => setSelectedProperty(null)}
+          onOpenEditProperty={(prop) => {
+            setSelectedProperty(null);
+            setEditingProperty(prop);
+            setIsPropertyFormOpen(true);
+          }}
           onRequireLogin={() => openAuthModal('login')}
           onToggleFavorite={handleToggleFavorite}
           onToggleCompare={handleToggleCompare}
