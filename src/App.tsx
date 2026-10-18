@@ -14,6 +14,9 @@ import {
   User,
   Sparkles,
   Edit3,
+  CheckCircle2,
+  XCircle,
+  Info,
 } from 'lucide-react';
 import {
   onAuthStateChanged,
@@ -87,7 +90,12 @@ import {
   WorkspaceSubView,
   isAgentConfirmedOnProperty,
 } from './components/RoleWorkspaceView';
-import { canUserEditProperty } from './utils/propertyPermissions';
+import {
+  canUserEditProperty,
+  isUserOwnerOfProperty,
+  isUserAssignedAgentOfProperty,
+  getMinVisitDate,
+} from './utils/propertyPermissions';
 import {
   buildFlexibleSmartSearch,
   normalizeSearchText,
@@ -1029,13 +1037,10 @@ export default function App() {
       properties.find((p) => p.id === propId || (existingId && p.id === existingId)) ||
       editingProperty;
 
-    // Verificar permisos estrictos de edición: solo el propietario dueño, el agente confirmado a cargo, o el administrador
+    // Verificar permisos de edición: propietario dueño, agente confirmado a cargo, o administrador
     if (isEdit && existingProp) {
-      const isOwner = existingProp.ownerId === currentUser.uid;
-      const isAssignedAgent =
-        currentUser.role === 'agente' && isAgentConfirmedOnProperty(existingProp, currentUser.uid);
-      const isAdmin = currentUser.role === 'administrador';
-      if (!isOwner && !isAssignedAgent && !isAdmin) {
+      const isAuthorized = canUserEditProperty(existingProp, currentUser, users);
+      if (!isAuthorized) {
         notify(
           'error',
           'Sin permisos sobre esta publicación',
@@ -1048,7 +1053,9 @@ export default function App() {
     // Las nuevas publicaciones de propietarios quedan pendientes de revisión del administrador.
     // Si es edición de una publicación ya aprobada, se mantiene aprobada para reflejar los cambios en el catálogo de inmediato.
     const publicationStatus: PublicationStatus = isEdit
-      ? existingProp?.publicationStatus || 'aprobada'
+      ? existingProp?.publicationStatus === 'rechazada' || existingProp?.publicationStatus === 'suspendida'
+        ? 'pendiente'
+        : existingProp?.publicationStatus || 'aprobada'
       : currentUser.role === 'administrador'
       ? 'aprobada'
       : 'pendiente';
@@ -1058,16 +1065,17 @@ export default function App() {
       id: propId,
       ownerId: existingProp?.ownerId || (editingProperty?.ownerId ?? currentUser.uid),
       ownerName: existingProp?.ownerName || (editingProperty?.ownerName ?? currentUser.displayName),
-      agentId: data.agentId || existingProp?.agentId || (editingProperty?.agentId ?? ''),
-      agentName: data.agentName || existingProp?.agentName || (editingProperty?.agentName ?? ''),
+      agentId: data.agentId !== undefined ? data.agentId : (existingProp?.agentId || (editingProperty?.agentId ?? '')),
+      agentName: data.agentName !== undefined ? data.agentName : (existingProp?.agentName || (editingProperty?.agentName ?? '')),
       managementMode: data.managementMode || existingProp?.managementMode || 'directa',
       agentRequestType: data.agentRequestType || existingProp?.agentRequestType || 'ninguna',
       agentAssignmentStatus:
         data.agentAssignmentStatus || existingProp?.agentAssignmentStatus || 'sin_agente',
-      requestedAgentId: data.requestedAgentId || existingProp?.requestedAgentId || '',
-      requestedAgentName: data.requestedAgentName || existingProp?.requestedAgentName || '',
-      agentRejectionReason: data.agentRejectionReason || existingProp?.agentRejectionReason || '',
+      requestedAgentId: data.requestedAgentId !== undefined ? data.requestedAgentId : (existingProp?.requestedAgentId || ''),
+      requestedAgentName: data.requestedAgentName !== undefined ? data.requestedAgentName : (existingProp?.requestedAgentName || ''),
+      agentRejectionReason: data.agentRejectionReason !== undefined ? data.agentRejectionReason : (existingProp?.agentRejectionReason || ''),
       publicationStatus,
+      rejectionReason: publicationStatus === 'pendiente' ? '' : existingProp?.rejectionReason || '',
       createdAtIso: existingProp?.createdAtIso || (editingProperty?.createdAtIso ?? new Date().toISOString()),
     };
 
@@ -1103,6 +1111,21 @@ export default function App() {
             'info'
           );
         }
+      }
+
+      if (
+        isEdit &&
+        existingProp &&
+        publicationStatus === 'pendiente' &&
+        existingProp.publicationStatus !== 'pendiente' &&
+        adminUser
+      ) {
+        await pushUserNotification(
+          adminUser.uid,
+          'Publicación corregida para revisión',
+          `${newProp.ownerName} actualizó "${newProp.title}" y la envió nuevamente a revisión.`,
+          'info'
+        );
       }
 
       if (
@@ -1149,8 +1172,13 @@ export default function App() {
   const handleDeleteProperty = async (propertyId: string) => {
     const target = properties.find((p) => p.id === propertyId);
     if (!currentUser || !target) return;
-    if (currentUser.role !== 'administrador' && target.ownerId !== currentUser.uid) {
+    const canDelete =
+      currentUser.role === 'administrador' || isUserOwnerOfProperty(target, currentUser, users);
+    if (!canDelete) {
       notify('error', 'Sin permisos', 'Solo el propietario titular o el administrador pueden eliminar esta publicación.');
+      return;
+    }
+    if (!window.confirm(`¿Eliminar la publicación "${target.title}"? Esta acción no se puede deshacer.`)) {
       return;
     }
 
@@ -1170,10 +1198,7 @@ export default function App() {
   const handleUpdateAvailability = async (propertyId: string, availability: AvailabilityStatus) => {
     const target = properties.find((p) => p.id === propertyId);
     if (!currentUser || !target) return;
-    const canModify =
-      currentUser.role === 'administrador' ||
-      target.ownerId === currentUser.uid ||
-      (currentUser.role === 'agente' && isAgentConfirmedOnProperty(target, currentUser.uid));
+    const canModify = canUserEditProperty(target, currentUser, users);
     if (!canModify) {
       notify('error', 'Sin permisos', 'No tenés permisos para modificar esta propiedad.');
       return;
@@ -1204,8 +1229,9 @@ export default function App() {
   ) => {
     const target = properties.find((p) => p.id === propertyId);
     if (!currentUser || !target) return;
-    if (currentUser.role !== 'administrador' && target.ownerId !== currentUser.uid) {
-      notify('error', 'Sin permisos', 'Solo el propietario titular puede cambiar la modalidad de gestión.');
+    const isOwner = isUserOwnerOfProperty(target, currentUser, users);
+    if (currentUser.role !== 'administrador' && !isOwner) {
+      notify('error', 'Sin permisos', 'Solo el propietario titular o el administrador pueden cambiar la modalidad de gestión.');
       return;
     }
 
@@ -1312,7 +1338,12 @@ export default function App() {
   ) => {
     const target = properties.find((p) => p.id === propertyId);
     if (!currentUser || !target) return;
-    if (currentUser.role !== 'agente' || target.requestedAgentId !== currentUser.uid) {
+    const isAssignedAgent =
+      currentUser.role === 'agente' &&
+      (target.requestedAgentId === currentUser.uid ||
+        target.agentId === currentUser.uid ||
+        isUserAssignedAgentOfProperty(target, currentUser, users));
+    if (!isAssignedAgent && currentUser.role !== 'administrador') {
       notify('error', 'Sin permisos', 'Esta solicitud no corresponde a tu perfil de agente.');
       return;
     }
@@ -1426,28 +1457,48 @@ export default function App() {
     publicationStatus: PublicationStatus,
     rejectionReason?: string
   ) => {
+    if (currentUser?.role !== 'administrador') return;
+    if (publicationStatus === 'rechazada' && !rejectionReason?.trim()) {
+      notify('error', 'Falta el motivo', 'Escribí el motivo antes de rechazar la publicación.');
+      return;
+    }
     const target = properties.find((p) => p.id === propertyId);
+    const reason = rejectionReason?.trim() || '';
     try {
       await updateDoc(doc(db, 'properties', propertyId), {
         publicationStatus,
-        rejectionReason: rejectionReason || '',
+        rejectionReason: reason,
       });
       setProperties((prev) =>
         prev.map((p) =>
           p.id === propertyId
-            ? { ...p, publicationStatus, rejectionReason: rejectionReason || '' }
+            ? { ...p, publicationStatus, rejectionReason: reason }
             : p
         )
       );
       if (target) {
         await pushUserNotification(
           target.ownerId,
-          publicationStatus === 'aprobada' ? 'Publicación aprobada' : 'Publicación rechazada',
+          publicationStatus === 'aprobada'
+            ? 'Publicación aprobada'
+            : 'Publicación rechazada',
           publicationStatus === 'aprobada'
             ? `Tu propiedad "${target.title}" fue aprobada y está visible en el catálogo público.`
-            : `Tu propiedad "${target.title}" fue rechazada: ${rejectionReason || 'Revisar datos'}`,
+            : `Tu propiedad "${target.title}" fue rechazada. Motivo: ${reason}`,
           publicationStatus === 'aprobada' ? 'success' : 'warning'
         );
+        if (target.agentId && target.agentId !== target.ownerId) {
+          await pushUserNotification(
+            target.agentId,
+            publicationStatus === 'aprobada'
+              ? 'Publicación aprobada'
+              : 'Publicación rechazada',
+            publicationStatus === 'aprobada'
+              ? `La propiedad "${target.title}" fue aprobada.`
+              : `La propiedad "${target.title}" fue rechazada. Motivo: ${reason}`,
+            publicationStatus === 'aprobada' ? 'success' : 'warning'
+          );
+        }
       }
       notify(
         'success',
@@ -1469,6 +1520,15 @@ export default function App() {
     notes: string
   ) => {
     if (!currentUser) return;
+    const minDate = getMinVisitDate();
+    if (date < minDate) {
+      notify(
+        'error',
+        'Fecha no permitida para visita',
+        'Las visitas deben programarse con al menos 24 horas de anticipación (a partir de mañana).'
+      );
+      return;
+    }
     const visitId = sanitizeId(`vis_${Date.now()}`);
     const confirmedAgentId = isAgentConfirmedOnProperty(property) ? property.agentId || '' : '';
 
@@ -2275,29 +2335,50 @@ export default function App() {
   return (
     <div className="min-h-screen flex flex-col bg-[#FCFBF7] text-[#1F241F]">
       {/* =====================================================================
-          TOAST NOTIFICATIONS
+          TOAST NOTIFICATIONS (Capa principal superior sobre cualquier modal)
          ===================================================================== */}
-      <div className="fixed bottom-5 right-5 z-50 flex flex-col gap-2.5 max-w-sm w-full pointer-events-none px-4 sm:px-0">
+      <div className="fixed bottom-5 right-4 sm:bottom-6 sm:right-6 z-[99999] flex flex-col gap-2.5 max-w-md w-full pointer-events-none px-2 sm:px-0">
         {toasts.map((t) => (
           <div
             key={t.id}
-            className={`pointer-events-auto flex items-start justify-between gap-3 p-4 rounded-sm border-2 shadow-lg animate-fade-slide ${
+            className={`pointer-events-auto flex items-start gap-3 p-4 rounded-sm border-2 shadow-2xl backdrop-blur-md animate-fade-slide ${
               t.type === 'success'
-                ? 'bg-emerald-900 text-white border-emerald-400'
+                ? 'bg-[#EBF9ED] text-[#0F4A1E] border-emerald-500 shadow-emerald-950/15 ring-2 ring-emerald-500/20'
                 : t.type === 'error'
-                ? 'bg-red-700 text-white border-red-300'
-                : 'bg-amber-50 text-amber-950 border-amber-400'
+                ? 'bg-[#FDF2F2] text-[#691C1C] border-red-500 shadow-red-950/15 ring-2 ring-red-500/20'
+                : 'bg-[#FEF9EE] text-[#5C3B00] border-amber-500 shadow-amber-950/15 ring-2 ring-amber-500/20'
             }`}
           >
-            <div className="flex-1 text-xs">
-              <div className="font-semibold text-sm">{t.title}</div>
-              {t.description && <p className="opacity-95 mt-0.5 leading-relaxed">{t.description}</p>}
+            <div className="shrink-0 mt-0.5">
+              {t.type === 'success' && (
+                <div className="w-7 h-7 rounded-full bg-emerald-500 text-white flex items-center justify-center shadow-xs">
+                  <CheckCircle2 className="w-4 h-4 stroke-[2.5]" />
+                </div>
+              )}
+              {t.type === 'error' && (
+                <div className="w-7 h-7 rounded-full bg-red-600 text-white flex items-center justify-center shadow-xs">
+                  <XCircle className="w-4 h-4 stroke-[2.5]" />
+                </div>
+              )}
+              {t.type === 'info' && (
+                <div className="w-7 h-7 rounded-full bg-amber-500 text-white flex items-center justify-center shadow-xs">
+                  <Info className="w-4 h-4 stroke-[2.5]" />
+                </div>
+              )}
             </div>
+
+            <div className="flex-1 text-xs">
+              <div className="font-bold text-sm leading-snug">{t.title}</div>
+              {t.description && (
+                <p className="opacity-90 mt-1 leading-relaxed text-[12px]">{t.description}</p>
+              )}
+            </div>
+
             <button
               type="button"
               onClick={() => setToasts((prev) => prev.filter((item) => item.id !== t.id))}
               title="Cerrar aviso"
-              className="p-1 rounded-sm bg-white/90 text-red-600 hover:text-red-700 hover:bg-white transition-colors shrink-0 cursor-pointer"
+              className="p-1 rounded-sm text-current/60 hover:text-current hover:bg-black/5 transition-colors shrink-0 cursor-pointer"
             >
               <X className="w-4 h-4 stroke-[2.5]" />
             </button>
@@ -2869,7 +2950,7 @@ export default function App() {
                         <span className="text-xs text-[#39483A]/75 font-tabular">
                           {heroFeaturedProperty.bedrooms} dorm. · {heroFeaturedProperty.surface} m²
                         </span>
-                        {canUserEditProperty(heroFeaturedProperty, currentUser) && (
+                        {canUserEditProperty(heroFeaturedProperty, currentUser, users) && (
                           <button
                             type="button"
                             onClick={(e) => {
@@ -2880,7 +2961,7 @@ export default function App() {
                             className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-bold bg-[#B86F52] text-[#FCFBF7] rounded-sm hover:bg-[#a35e42] transition-colors mt-1 cursor-pointer"
                           >
                             <Edit3 className="w-3 h-3" />
-                            Editar Ficha
+                            Editar ficha
                           </button>
                         )}
                       </div>
@@ -3223,7 +3304,7 @@ export default function App() {
                             </span>
                           </div>
 
-                          {canUserEditProperty(prop, currentUser) ? (
+                          {canUserEditProperty(prop, currentUser, users) ? (
                             <div className="flex items-center gap-2">
                               <button
                                 type="button"
@@ -3244,7 +3325,7 @@ export default function App() {
                                 title="Editar ficha de esta propiedad"
                               >
                                 <Edit3 className="w-3.5 h-3.5" />
-                                Editar Ficha
+                                Editar ficha
                               </button>
                             </div>
                           ) : (
@@ -3553,6 +3634,7 @@ export default function App() {
         <PropertyDetailModal
           property={selectedProperty}
           currentUser={currentUser}
+          users={users}
           isFavorite={favoriteIds.includes(selectedProperty.id)}
           isCompared={comparedIds.includes(selectedProperty.id)}
           aiReason={

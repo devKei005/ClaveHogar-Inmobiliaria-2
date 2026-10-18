@@ -1,81 +1,99 @@
 import { PropertyItem, UserProfile } from '../types';
 
+/**
+ * Verifica si un agente está confirmado o solicitado en una propiedad.
+ */
 export function isAgentConfirmedOnProperty(
   prop: PropertyItem,
   agentUid?: string
 ): boolean {
   const agentId = (prop.agentId || '').trim();
   const reqAgentId = (prop.requestedAgentId || '').trim();
-  const hasAgent = Boolean(
-    agentId || (reqAgentId && prop.agentAssignmentStatus === 'asignado')
-  );
+  const hasAgent = Boolean(agentId || reqAgentId);
   if (!hasAgent) return false;
-  const statusOk =
-    !prop.agentAssignmentStatus || prop.agentAssignmentStatus === 'asignado';
-  if (!statusOk) return false;
+
   if (agentUid) {
-    return (
-      agentId === agentUid ||
-      (reqAgentId === agentUid && prop.agentAssignmentStatus === 'asignado')
-    );
+    const cleanUid = agentUid.trim();
+    return agentId === cleanUid || reqAgentId === cleanUid;
   }
   return true;
 }
 
+/**
+ * Retorna la fecha mínima para solicitar visitas (al menos 24 horas de anticipación).
+ * No permite fechas pasadas ni la fecha de hoy (mínimo mañana).
+ * Formato string YYYY-MM-DD para atributos 'min' en inputs de tipo date.
+ */
+export function getMinVisitDate(): string {
+  const tomorrow = new Date();
+  tomorrow.setDate(tomorrow.getDate() + 1);
+  const yyyy = tomorrow.getFullYear();
+  const mm = String(tomorrow.getMonth() + 1).padStart(2, '0');
+  const dd = String(tomorrow.getDate()).padStart(2, '0');
+  return `${yyyy}-${mm}-${dd}`;
+}
+
+/** Determina si el usuario actual es el propietario titular por UID exacto. */
 export function isUserOwnerOfProperty(
   prop: PropertyItem,
-  user: UserProfile | null
+  user: UserProfile | null,
+  allUsers?: UserProfile[]
 ): boolean {
   if (!user) return false;
-  if (prop.ownerId && prop.ownerId === user.uid) return true;
-
-  const userEmail = (user.email || '').trim().toLowerCase();
-  // Caso de enlace de cuenta demo o UID persistente de Alejandro Santamarina
-  if (
-    userEmail === 'propietario@clavehogar.com' &&
-    prop.ownerId === 'kKqp7VS3xhPYfy6RvCh0SWJIqi12'
-  ) {
-    return true;
-  }
-
-  // Coincidencia por nombre de titular en roles propietario o cliente-propietario
-  if (
-    prop.ownerName &&
-    user.displayName &&
-    prop.ownerName.trim().toLowerCase() === user.displayName.trim().toLowerCase() &&
-    (user.role === 'propietario' || user.isAlsoOwner)
-  ) {
-    return true;
-  }
-
-  return false;
+  return Boolean(user.uid?.trim() && prop.ownerId?.trim() && user.uid.trim() === prop.ownerId.trim());
 }
 
+/**
+ * Determina si el usuario actual es el agente asignado a la propiedad.
+ * Las solicitudes pendientes no habilitan la edición.
+ */
 export function isUserAssignedAgentOfProperty(
   prop: PropertyItem,
-  user: UserProfile | null
+  user: UserProfile | null,
+  allUsers?: UserProfile[]
 ): boolean {
-  if (!user || user.role !== 'agente') return false;
+  if (!user) return false;
+  if (user.role !== 'agente') return false;
 
-  if (isAgentConfirmedOnProperty(prop, user.uid)) return true;
-
+  const userUid = (user.uid || '').trim();
   const userEmail = (user.email || '').trim().toLowerCase();
-  // Caso de enlace de cuenta demo o UID de Valentina Alvear
+  const userName = (user.displayName || '').trim().toLowerCase();
+  const propAgentName = (prop.agentName || '').trim().toLowerCase();
+  const propAgentId = (prop.agentId || '').trim();
+
+  // Solo el agente confirmado en agentId puede editar la publicación.
+  if (userUid && propAgentId === userUid) {
+    return true;
+  }
+
+  // La cuenta demo se vincula únicamente con su UID asignado.
   if (
     userEmail === 'agente@clavehogar.com' &&
-    isAgentConfirmedOnProperty(prop) &&
-    (prop.agentId === 'SysykUHU5FVubQzrSHOBi3JnhQs2' ||
-      prop.requestedAgentId === 'SysykUHU5FVubQzrSHOBi3JnhQs2')
+    propAgentId === 'SysykUHU5FVubQzrSHOBi3JnhQs2'
   ) {
     return true;
   }
 
-  // Coincidencia por nombre de agente registrado en la propiedad
+  // Coincidencia por correo en la lista de usuarios.
+  if (userEmail && allUsers && allUsers.length > 0) {
+    const assignedAgentUser = allUsers.find(
+      (u) => propAgentId && u.uid === propAgentId
+    );
+    if (
+      assignedAgentUser &&
+      (assignedAgentUser.email || '').trim().toLowerCase() === userEmail
+    ) {
+      return true;
+    }
+  }
+
+  // Compatibilidad con asignaciones antiguas sin UID, por nombre completo exacto.
   if (
-    prop.agentName &&
-    user.displayName &&
-    prop.agentName.trim().toLowerCase() === user.displayName.trim().toLowerCase() &&
-    isAgentConfirmedOnProperty(prop)
+    !propAgentId &&
+    prop.agentAssignmentStatus === 'asignado' &&
+    userName &&
+    propAgentName &&
+    propAgentName === userName
   ) {
     return true;
   }
@@ -83,13 +101,19 @@ export function isUserAssignedAgentOfProperty(
   return false;
 }
 
+/**
+ * Determina si un usuario tiene permisos para editar la propiedad:
+ * - Propietario titular
+ * - Agente confirmado a cargo
+ */
 export function canUserEditProperty(
   prop: PropertyItem,
-  user: UserProfile | null
+  user: UserProfile | null,
+  allUsers?: UserProfile[]
 ): boolean {
   if (!user) return false;
-  if (user.role === 'administrador') return true;
-  if (isUserOwnerOfProperty(prop, user)) return true;
-  if (isUserAssignedAgentOfProperty(prop, user)) return true;
+  if (user.role === 'administrador') return false;
+  if (isUserOwnerOfProperty(prop, user, allUsers)) return true;
+  if (isUserAssignedAgentOfProperty(prop, user, allUsers)) return true;
   return false;
 }
