@@ -31,10 +31,13 @@ import {
   collection,
   doc,
   setDoc,
+  getDoc,
   updateDoc,
   deleteDoc,
   onSnapshot,
   getDocs,
+  query,
+  where,
 } from 'firebase/firestore';
 
 import {
@@ -123,6 +126,47 @@ function getDefaultSubViewForRole(role: UserRole): WorkspaceSubView {
   }
 }
 
+function getCachedUsers(): UserProfile[] {
+  try {
+    const raw = localStorage.getItem('clavehogar_users_v2');
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        const map = new Map<string, UserProfile>();
+        for (const u of parsed) {
+          if (u.uid) map.set(u.uid, u);
+          if (u.email) map.set(u.email.toLowerCase(), u);
+        }
+        for (const init of INITIAL_USERS) {
+          if (!map.has(init.uid) && !map.has(init.email.toLowerCase())) {
+            map.set(init.uid, init);
+          }
+        }
+        const seen = new Set<string>();
+        const list: UserProfile[] = [];
+        map.forEach((u) => {
+          if (u.uid && !seen.has(u.uid)) {
+            seen.add(u.uid);
+            list.push(u);
+          }
+        });
+        return list.length > 0 ? list : INITIAL_USERS;
+      }
+    }
+  } catch {
+    // ignore
+  }
+  return INITIAL_USERS;
+}
+
+function saveCachedUsers(userList: UserProfile[]) {
+  try {
+    localStorage.setItem('clavehogar_users_v2', JSON.stringify(userList));
+  } catch {
+    // ignore
+  }
+}
+
 export default function App() {
   const [activeSection, setActiveSection] = useState<MainSection>('catalogo');
   const [activeSubView, setActiveSubView] = useState<WorkspaceSubView>('cliente_favoritos');
@@ -131,14 +175,27 @@ export default function App() {
   const [isSideMenuOpen, setIsSideMenuOpen] = useState(false);
 
   // Auth & User state
-  const [users, setUsers] = useState<UserProfile[]>(INITIAL_USERS);
+  const [users, setUsers] = useState<UserProfile[]>(() => getCachedUsers());
   const usersRef = useRef<UserProfile[]>(INITIAL_USERS);
   useEffect(() => {
     usersRef.current = users;
   }, [users]);
 
-  const [currentUser, setCurrentUser] = useState<UserProfile | null>(null);
-  const isDemoSessionRef = useRef<boolean>(false);
+  const [currentUser, setCurrentUser] = useState<UserProfile | null>(() => {
+    try {
+      const saved = localStorage.getItem('clavehogar_active_session');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (parsed && (parsed.email || parsed.uid)) {
+          return parsed as UserProfile;
+        }
+      }
+    } catch {}
+    return null;
+  });
+  const isDemoSessionRef = useRef<boolean>(
+    Boolean(typeof window !== 'undefined' && localStorage.getItem('clavehogar_active_session'))
+  );
 
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
   const [authModalMode, setAuthModalMode] = useState<AuthModalMode>('login');
@@ -265,11 +322,20 @@ export default function App() {
 
     async function bootstrapFirestore() {
       try {
+        for (const u of INITIAL_USERS) {
+          try {
+            const userDocRef = doc(db, 'app_users', u.uid);
+            const userSnap = await getDoc(userDocRef);
+            if (!userSnap.exists()) {
+              await setDoc(userDocRef, u);
+            }
+          } catch (e) {
+            console.warn('Seed demo user error:', e);
+          }
+        }
+
         const propsSnap = await getDocs(collection(db, 'properties'));
         if (propsSnap.empty) {
-          for (const u of INITIAL_USERS) {
-            await setDoc(doc(db, 'app_users', u.uid), u);
-          }
           for (const p of INITIAL_PROPERTIES) {
             await setDoc(doc(db, 'properties', p.id), p);
           }
@@ -375,17 +441,7 @@ export default function App() {
         });
 
         setUsers(uniqueList);
-        setCurrentUser((prev) => {
-          if (!prev) return null;
-          const updated =
-            uniqueList.find((u) => u.uid === prev.uid) ||
-            uniqueList.find((u) => u.email.toLowerCase() === prev.email.toLowerCase());
-          if (!updated) return prev;
-          return {
-            ...updated,
-            photoUrl: updated.photoUrl || prev.photoUrl || '',
-          };
-        });
+        saveCachedUsers(uniqueList);
       },
       (err) => handleFirestoreError(err, OperationType.GET, 'app_users')
     );
@@ -518,27 +574,97 @@ export default function App() {
   // Sync Firebase Auth without wiping out quick-access demo sessions
   useEffect(() => {
     const unsubAuth = onAuthStateChanged(auth, async (user) => {
-      if (!user) {
-        if (!isDemoSessionRef.current) {
-          setCurrentUser(null);
-        }
+      if (isDemoSessionRef.current) {
         return;
       }
-      isDemoSessionRef.current = false;
+      if (!user) {
+        setCurrentUser(null);
+        return;
+      }
       const uid = sanitizeId(user.uid);
       const email = truncateText(user.email || 'usuario@clavehogar.com', SCHEMA_LIMITS.EMAIL_MAX);
 
+      // 1. Primero consultar si ya existe el perfil persistido en Firestore
+      try {
+        const snap = await getDoc(doc(db, 'app_users', uid));
+        if (snap.exists()) {
+          const raw = snap.data() as Partial<UserProfile>;
+          const profile: UserProfile = {
+            uid,
+            displayName: raw.displayName || user.displayName || email.split('@')[0] || 'Usuario ClaveHogar',
+            email: raw.email || email,
+            phone: raw.phone || '+54 9 11 4500-1200',
+            address: raw.address || 'Buenos Aires, Argentina',
+            dni: raw.dni || '',
+            role: (raw.role as UserRole) || 'cliente',
+            isAlsoOwner: Boolean(raw.isAlsoOwner),
+            active: raw.active !== false,
+            agencyName: raw.agencyName || '',
+            bio: raw.bio || '',
+            photoUrl: raw.photoUrl || user.photoURL || '',
+          };
+          setCurrentUser(profile);
+          setUsers((prev) => {
+            const next = [profile, ...prev.filter((u) => u.uid !== uid)];
+            saveCachedUsers(next);
+            return next;
+          });
+          return;
+        }
+      } catch (err) {
+        console.warn('Could not read existing user doc from Firestore:', err);
+      }
+
+      // 1.b Si no se encontró por ID de documento, buscar en Firestore por campo email
+      try {
+        const qSnap = await getDocs(
+          query(collection(db, 'app_users'), where('email', '==', email))
+        );
+        if (!qSnap.empty) {
+          const raw = qSnap.docs[0].data() as Partial<UserProfile>;
+          const profile: UserProfile = {
+            uid,
+            displayName: raw.displayName || user.displayName || email.split('@')[0] || 'Usuario ClaveHogar',
+            email: raw.email || email,
+            phone: raw.phone || '+54 9 11 4500-1200',
+            address: raw.address || 'Buenos Aires, Argentina',
+            dni: raw.dni || '',
+            role: (raw.role as UserRole) || 'cliente',
+            isAlsoOwner: Boolean(raw.isAlsoOwner),
+            active: raw.active !== false,
+            agencyName: raw.agencyName || '',
+            bio: raw.bio || '',
+            photoUrl: raw.photoUrl || user.photoURL || '',
+          };
+          setCurrentUser(profile);
+          setUsers((prev) => {
+            const next = [
+              profile,
+              ...prev.filter((u) => u.uid !== uid && u.email.toLowerCase() !== email.toLowerCase()),
+            ];
+            saveCachedUsers(next);
+            return next;
+          });
+          return;
+        }
+      } catch (err) {
+        console.warn('Could not query user by email in Firestore:', err);
+      }
+
+      // 2. Si no está en Firestore por UID ni email, buscar en memoria
       const currentList = usersRef.current;
       const existing =
         currentList.find((u) => u.uid === uid) ||
         currentList.find((u) => u.email.toLowerCase() === email.toLowerCase()) ||
-        INITIAL_USERS.find((u) => u.email.toLowerCase() === email.toLowerCase());
+        INITIAL_USERS.find((u) => u.email.toLowerCase() === email.toLowerCase() || u.uid === uid);
 
       if (existing) {
         setCurrentUser(existing);
+        // NUNCA sobreescribir el documento de Firestore hacia atrás
         return;
       }
 
+      // 3. Usuario totalmente nuevo
       const isBootstrapAdmin = email.toLowerCase() === 'programacionkeichi@gmail.com';
       const defaultRole: UserRole = isBootstrapAdmin ? 'administrador' : 'cliente';
       const displayName = truncateText(
@@ -554,13 +680,19 @@ export default function App() {
         address: 'Buenos Aires, Argentina',
         dni: '35.100.200',
         role: defaultRole,
-        isAlsoOwner: isBootstrapAdmin,
+        isAlsoOwner: false,
         active: true,
         agencyName: isBootstrapAdmin ? 'ClaveHogar Administración' : '',
         bio: 'Cliente registrado en ClaveHogar.',
+        photoUrl: user.photoURL || '',
       };
 
       setCurrentUser(newProfile);
+      setUsers((prev) => {
+        const next = [newProfile, ...prev.filter((u) => u.uid !== uid)];
+        saveCachedUsers(next);
+        return next;
+      });
       setActiveSubView(getDefaultSubViewForRole(newProfile.role));
       try {
         await setDoc(doc(db, 'app_users', uid), newProfile, { merge: true });
@@ -577,6 +709,24 @@ export default function App() {
     const fresh = properties.find((p) => p.id === selectedProperty.id);
     if (fresh) setSelectedProperty(fresh);
   }, [properties, selectedProperty]);
+
+  // Sincronizar automáticamente la condición de propietario para clientes que ya tengan publicaciones creadas
+  useEffect(() => {
+    if (!currentUser || currentUser.role !== 'cliente' || currentUser.isAlsoOwner) return;
+    const hasPublishedProperties = properties.some((p) =>
+      isUserOwnerOfProperty(p, currentUser, users)
+    );
+    if (hasPublishedProperties) {
+      const updatedUser: UserProfile = { ...currentUser, isAlsoOwner: true };
+      setCurrentUser(updatedUser);
+      setUsers((prev) => {
+        const next = prev.map((u) => (u.uid === updatedUser.uid ? updatedUser : u));
+        saveCachedUsers(next);
+        return next;
+      });
+      setDoc(doc(db, 'app_users', currentUser.uid), { isAlsoOwner: true }, { merge: true }).catch(() => {});
+    }
+  }, [currentUser, properties, users]);
 
   // Al navegar al Catálogo, nos aseguramos de que el input de búsqueda de texto esté limpio
   useEffect(() => {
@@ -702,10 +852,59 @@ export default function App() {
     try {
       isDemoSessionRef.current = false;
       const cred = await signInWithEmailAndPassword(auth, email.trim(), password);
-      const profile =
-        officialDemoProfile ||
-        users.find((u) => u.uid === cred.user.uid) ||
-        users.find((u) => u.email.toLowerCase() === emailClean);
+
+      let profile: UserProfile | null = null;
+      try {
+        const snap = await getDoc(doc(db, 'app_users', cred.user.uid));
+        if (snap.exists()) {
+          const raw = snap.data() as Partial<UserProfile>;
+          profile = {
+            uid: cred.user.uid,
+            displayName: raw.displayName || cred.user.displayName || emailClean.split('@')[0],
+            email: raw.email || emailClean,
+            phone: raw.phone || '+54 9 11 4000-0000',
+            address: raw.address || 'Buenos Aires, Argentina',
+            dni: raw.dni || '',
+            role: (raw.role as UserRole) || 'cliente',
+            isAlsoOwner: Boolean(raw.isAlsoOwner),
+            active: raw.active !== false,
+            agencyName: raw.agencyName || '',
+            bio: raw.bio || '',
+            photoUrl: raw.photoUrl || cred.user.photoURL || '',
+          };
+        } else {
+          const qSnap = await getDocs(
+            query(collection(db, 'app_users'), where('email', '==', emailClean))
+          );
+          if (!qSnap.empty) {
+            const raw = qSnap.docs[0].data() as Partial<UserProfile>;
+            profile = {
+              uid: cred.user.uid,
+              displayName: raw.displayName || cred.user.displayName || emailClean.split('@')[0],
+              email: raw.email || emailClean,
+              phone: raw.phone || '+54 9 11 4000-0000',
+              address: raw.address || 'Buenos Aires, Argentina',
+              dni: raw.dni || '',
+              role: (raw.role as UserRole) || 'cliente',
+              isAlsoOwner: Boolean(raw.isAlsoOwner),
+              active: raw.active !== false,
+              agencyName: raw.agencyName || '',
+              bio: raw.bio || '',
+              photoUrl: raw.photoUrl || cred.user.photoURL || '',
+            };
+          }
+        }
+      } catch (e) {
+        console.warn('Error reading fresh user doc on login:', e);
+      }
+
+      if (!profile) {
+        profile =
+          users.find((u) => u.uid === cred.user.uid) ||
+          users.find((u) => u.email.toLowerCase() === emailClean) ||
+          officialDemoProfile ||
+          null;
+      }
 
       if (!profile) {
         notify('error', 'Perfil no encontrado', 'Tu cuenta existe pero falta el perfil en la base de datos.');
@@ -722,19 +921,28 @@ export default function App() {
       notify('success', `¡Bienvenido/a, ${profile.displayName}!`, `Ingresaste con tu cuenta de ${profile.role}.`);
       return true;
     } catch (err: any) {
-      // Si el usuario ingresó manualmente una de las 4 cuentas oficiales @clavehogar.com con su clave demo (123456)
-      if (officialDemoProfile && password === '123456') {
-        if (!officialDemoProfile.active) {
+      const cleanPassword = password.trim();
+      const targetUser =
+        users.find((u) => u.email.toLowerCase() === emailClean) ||
+        INITIAL_USERS.find((u) => u.email.toLowerCase() === emailClean);
+
+      // Si es una cuenta oficial demo o usuario registrado en la base con clave 123456
+      if (targetUser && cleanPassword === '123456') {
+        if (!targetUser.active) {
           notify('error', 'Cuenta suspendida', 'Esta cuenta está desactivada por el administrador.');
           return false;
         }
+        await signOut(auth).catch(() => {});
         isDemoSessionRef.current = true;
-        setCurrentUser(officialDemoProfile);
-        setActiveSubView(getDefaultSubViewForRole(officialDemoProfile.role));
+        try {
+          localStorage.setItem('clavehogar_active_session', JSON.stringify(targetUser));
+        } catch {}
+        setCurrentUser(targetUser);
+        setActiveSubView(getDefaultSubViewForRole(targetUser.role));
         notify(
           'success',
-          `¡Bienvenido/a, ${officialDemoProfile.displayName}!`,
-          `Ingresaste con la cuenta oficial ${officialDemoProfile.email} (${officialDemoProfile.role}).`
+          `¡Bienvenido/a, ${targetUser.displayName}!`,
+          `Ingresaste con la cuenta ${targetUser.email} (${targetUser.role}).`
         );
         return true;
       }
@@ -746,7 +954,7 @@ export default function App() {
           ? 'No existe una cuenta con ese correo.'
           : err?.code === 'auth/too-many-requests'
           ? 'Demasiados intentos. Probá más tarde.'
-          : 'No se pudo iniciar sesión.';
+          : 'No se pudo iniciar sesión. Verificá tu correo y contraseña.';
       notify('error', 'Error al iniciar sesión', msg);
       return false;
     }
@@ -796,7 +1004,11 @@ export default function App() {
       };
 
       await setDoc(doc(db, 'app_users', cred.user.uid), newUser);
-      setUsers((prev) => [newUser, ...prev.filter((u) => u.uid !== newUser.uid)]);
+      setUsers((prev) => {
+        const next = [newUser, ...prev.filter((u) => u.uid !== newUser.uid)];
+        saveCachedUsers(next);
+        return next;
+      });
       setCurrentUser(newUser);
       setActiveSubView('cliente_favoritos');
       notify(
@@ -873,6 +1085,11 @@ export default function App() {
 
   const handleLogout = async () => {
     isDemoSessionRef.current = false;
+    try {
+      localStorage.removeItem('clavehogar_active_session');
+    } catch {
+      // ignore
+    }
     try {
       await signOut(auth);
     } catch {
@@ -1032,6 +1249,14 @@ export default function App() {
   ) => {
     if (!currentUser) return;
     const isEdit = Boolean(existingId);
+    if (!isEdit && currentUser.role === 'administrador') {
+      notify(
+        'error',
+        'Función no permitida',
+        'El administrador supervisa y modera publicaciones, no crea inmuebles a su nombre.'
+      );
+      return;
+    }
     const propId = existingId ? sanitizeId(existingId) : sanitizeId(`prop_${Date.now()}`);
     const existingProp =
       properties.find((p) => p.id === propId || (existingId && p.id === existingId)) ||
@@ -1089,6 +1314,18 @@ export default function App() {
       );
       if (selectedProperty && (selectedProperty.id === propId || selectedProperty.id === existingId)) {
         setSelectedProperty(newProp);
+      }
+
+      // Si el usuario actual es cliente y publicó una propiedad, pasa a tener funciones de propietario
+      if (currentUser.role === 'cliente' && !currentUser.isAlsoOwner) {
+        const updatedUser: UserProfile = { ...currentUser, isAlsoOwner: true };
+        setCurrentUser(updatedUser);
+        setUsers((prev) => {
+          const next = prev.map((u) => (u.uid === updatedUser.uid ? updatedUser : u));
+          saveCachedUsers(next);
+          return next;
+        });
+        setDoc(doc(db, 'app_users', currentUser.uid), { isAlsoOwner: true }, { merge: true }).catch(() => {});
       }
 
       // Notificaciones según solicitud de agente y moderación
@@ -1936,13 +2173,26 @@ export default function App() {
   const handleUpdateUserAdmin = async (uid: string, role: UserRole, active: boolean) => {
     const target = users.find((u) => u.uid === uid);
     if (!target) return;
-    const updated: UserProfile = { ...target, role, active };
+    if (
+      currentUser?.uid === uid ||
+      currentUser?.email.toLowerCase() === target.email.toLowerCase()
+    ) {
+      notify('error', 'Acción no permitida', 'No podés cambiar tu propio rol o estado desde esta sesión.');
+      return;
+    }
+    const updated: UserProfile = {
+      ...target,
+      role,
+      active,
+      isAlsoOwner: role === 'propietario' ? true : target.isAlsoOwner,
+    };
     try {
       await setDoc(doc(db, 'app_users', uid), updated, { merge: true });
-      setUsers((prev) => prev.map((u) => (u.uid === uid ? updated : u)));
-      if (currentUser?.uid === uid) {
-        setCurrentUser(updated);
-      }
+      setUsers((prev) => {
+        const next = prev.map((u) => (u.uid === uid ? updated : u));
+        saveCachedUsers(next);
+        return next;
+      });
       await pushUserNotification(
         uid,
         'Actualización de rol / cuenta',
@@ -1951,7 +2201,7 @@ export default function App() {
       );
       notify(
         'success',
-        'Usuario actualizado correctamente',
+        'Rol cambiado exitosamente',
         `${updated.displayName}: Rol ${role.toUpperCase()} (${active ? 'Activa' : 'Inactiva'}).`
       );
     } catch (err) {
@@ -2159,7 +2409,10 @@ export default function App() {
         { id: 'cliente_operaciones', label: 'Mis Solicitudes y Reservas' },
         { id: 'cliente_consultas', label: 'Mis Consultas / Chat' }
       );
-      if (currentUser.isAlsoOwner) {
+      const isOwnerCapable =
+        currentUser.isAlsoOwner ||
+        properties.some((p) => isUserOwnerOfProperty(p, currentUser, users));
+      if (isOwnerCapable) {
         items.push(
           { id: 'propietario_inmuebles', label: 'Mis propiedades (Propietario)' },
           { id: 'propietario_visitas', label: 'Visitas a mis propiedades' },
@@ -2198,7 +2451,7 @@ export default function App() {
       );
     }
     return items;
-  }, [currentUser, favoriteIds.length]);
+  }, [currentUser, favoriteIds.length, properties, users]);
 
   const heroFeaturedProperty =
     approvedProperties[heroShowcaseIdx % Math.max(1, approvedProperties.length)] ||
@@ -2396,13 +2649,10 @@ export default function App() {
             <button
               type="button"
               onClick={() => setIsSideMenuOpen((prev) => !prev)}
-              className="p-2.5 text-[#39483A] hover:bg-[#F5F1E8] border border-[#D8C7AA] rounded-sm transition-colors flex items-center gap-2"
+              className="p-2.5 text-[#39483A] hover:bg-[#F5F1E8] border border-[#D8C7AA] rounded-sm transition-colors flex items-center justify-center cursor-pointer"
               aria-label="Abrir menú de navegación"
             >
               <Menu className="w-5 h-5" />
-              <span className="hidden sm:inline text-xs uppercase tracking-widest font-semibold">
-                Menú
-              </span>
             </button>
 
             <button
@@ -2772,7 +3022,9 @@ export default function App() {
                     ))}
                   </div>
 
-                  {currentUser.role === 'cliente' && !currentUser.isAlsoOwner && (
+                  {currentUser.role === 'cliente' &&
+                    !currentUser.isAlsoOwner &&
+                    !properties.some((p) => isUserOwnerOfProperty(p, currentUser, users)) && (
                     <div className="pt-3">
                       <button
                         type="button"
@@ -3162,9 +3414,10 @@ export default function App() {
                     {filteredProperties.length} {filteredProperties.length === 1 ? 'inmueble' : 'inmuebles'}
                   </span>
                   {currentUser &&
+                    currentUser.role !== 'administrador' &&
                     (currentUser.role === 'propietario' ||
-                      currentUser.role === 'administrador' ||
-                      currentUser.isAlsoOwner) && (
+                      currentUser.isAlsoOwner ||
+                      properties.some((p) => isUserOwnerOfProperty(p, currentUser, users))) && (
                       <button
                         type="button"
                         onClick={() => {
@@ -3176,7 +3429,10 @@ export default function App() {
                         + Publicar Propiedad
                       </button>
                     )}
-                  {currentUser && currentUser.role === 'cliente' && !currentUser.isAlsoOwner && (
+                  {currentUser &&
+                    currentUser.role === 'cliente' &&
+                    !currentUser.isAlsoOwner &&
+                    !properties.some((p) => isUserOwnerOfProperty(p, currentUser, users)) && (
                     <button
                       type="button"
                       onClick={handleEnableOwnerRole}
