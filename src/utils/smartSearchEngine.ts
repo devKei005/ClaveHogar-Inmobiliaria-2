@@ -665,10 +665,11 @@ export function buildFlexibleSmartSearch(
       // A) Operación
       if (detectedOperation !== 'ambos') {
         if (p.operationType === detectedOperation) {
-          score += 12;
+          score += 25;
           matchedCriteria.push(`Operación: ${p.operationType}`);
         } else {
-          score -= 18;
+          score -= 40;
+          hardMismatch = true;
         }
       }
 
@@ -677,7 +678,7 @@ export function buildFlexibleSmartSearch(
         wantsCasa || wantsDepto || wantsPH || wantsTerreno || wantsLocalOrOficina;
       if (requestedSpecificType) {
         if (wantsCasa && (propTypeNorm.includes('casa') || propTypeNorm.includes('chalet') || propTypeNorm.includes('villa'))) {
-          score += 14;
+          score += 20;
           matchedCriteria.push(`Tipo: ${p.propertyType}`);
         } else if (
           wantsDepto &&
@@ -686,22 +687,26 @@ export function buildFlexibleSmartSearch(
             propTypeNorm.includes('studio') ||
             propTypeNorm.includes('monoambiente'))
         ) {
-          score += 14;
+          score += 20;
           matchedCriteria.push(`Tipo: ${p.propertyType}`);
         } else if (wantsPH && propTypeNorm.includes('ph')) {
-          score += 14;
+          score += 20;
           matchedCriteria.push(`Tipo: ${p.propertyType}`);
         } else if (wantsTerreno && (propTypeNorm.includes('terreno') || propTypeNorm.includes('lote'))) {
-          score += 14;
+          score += 20;
           matchedCriteria.push(`Tipo: ${p.propertyType}`);
         } else if (
           wantsLocalOrOficina &&
           (propTypeNorm.includes('local') || propTypeNorm.includes('oficina'))
         ) {
-          score += 14;
+          score += 20;
           matchedCriteria.push(`Tipo: ${p.propertyType}`);
         } else {
-          score -= 12;
+          score -= 25;
+          // Si pidió casa y es un departamento u oficina, mismatch fuerte
+          if (wantsCasa && (propTypeNorm.includes('departamento') || propTypeNorm.includes('oficina'))) {
+            hardMismatch = true;
+          }
         }
       } else {
         matchedCriteria.push(`Inmueble: ${p.propertyType}`);
@@ -723,7 +728,7 @@ export function buildFlexibleSmartSearch(
           propFullNorm.includes(normalizeSearchText(pl))
         );
         if (exactPlace) {
-          score += 24;
+          score += 35;
           locMatched = true;
           matchedCriteria.push(`Ubicación: ${p.location}`);
         }
@@ -733,7 +738,7 @@ export function buildFlexibleSmartSearch(
           const inCaba = isPropertyInCaba(propFullNorm);
           const inGba = isPropertyInGba(propFullNorm);
           if (inCaba) {
-            score += 22;
+            score += 30;
             locMatched = true;
             matchedCriteria.push(`En Ciudad de Buenos Aires (CABA — ${p.location})`);
           } else if (isProximitySearch && inGba) {
@@ -741,7 +746,7 @@ export function buildFlexibleSmartSearch(
             locMatched = true;
             matchedCriteria.push(`Cerca de Ciudad de Buenos Aires (${p.location})`);
           } else if (qNorm.includes('buenos aires') && !qNorm.includes('ciudad') && inGba) {
-            score += 18;
+            score += 20;
             locMatched = true;
             matchedCriteria.push(`En Buenos Aires (${p.location})`);
           }
@@ -770,30 +775,38 @@ export function buildFlexibleSmartSearch(
             );
 
           if (askedSurPlace && propInSur) {
-            score += 16;
+            score += 18;
             locMatched = true;
             matchedCriteria.push(`Zona cercana (${p.location})`);
           } else if (askedNortePlace && propInNorte) {
-            score += 16;
+            score += 18;
             locMatched = true;
             matchedCriteria.push(`Zona cercana (${p.location})`);
           } else if (askedOestePlace && propInOeste) {
-            score += 16;
+            score += 18;
             locMatched = true;
             matchedCriteria.push(`Zona cercana (${p.location})`);
           }
         }
 
         if (!locMatched) {
-          // Si pidió un lugar específico y no coincide ni por cercanía, restamos puntos
-          // pero si el precio coincide exactamente, permitimos que se evalúe si es búsqueda flexible
-          score -= isProximitySearch ? 10 : 20;
+          // Si pidió un lugar específico y no coincide en nada con la zona, descartar
+          score -= 40;
+          hardMismatch = true;
         }
       }
 
-      // D) Precio / Rango de Presupuesto (ej: "entre 10 a 15 mil dolares" -> minPrice=10000, maxPrice=15000)
-      if (maxPrice > 0) {
-        if (minPrice > 0) {
+      // D) Precio / Rango de Presupuesto y Moneda
+      const isAskingPesos = qNorm.includes('peso') || qNorm.includes('pesos') || qNorm.includes('ars');
+      if (isAskingPesos && p.currency === 'USD') {
+        // Mismatch directo de moneda
+        score -= 50;
+        hardMismatch = true;
+      } else if (maxPrice > 0) {
+        if (maxPrice <= 200 && isAskingPesos) {
+          score -= 60;
+          hardMismatch = true;
+        } else if (minPrice > 0) {
           // Rango [minPrice, maxPrice]
           if (p.price >= minPrice && p.price <= maxPrice) {
             score += 28;
@@ -801,9 +814,9 @@ export function buildFlexibleSmartSearch(
               `Precio exacto en tu rango (${p.currency} ${p.price.toLocaleString()})`
             );
           } else if (p.price >= minPrice * 0.75 && p.price <= maxPrice * 1.25) {
-            score += 15;
+            score += 12;
             matchedCriteria.push(
-              `Precio muy cercano a tu rango (${p.currency} ${p.price.toLocaleString()})`
+              `Precio cercano a tu rango (${p.currency} ${p.price.toLocaleString()})`
             );
           } else {
             score -= 35;
@@ -812,11 +825,11 @@ export function buildFlexibleSmartSearch(
         } else {
           // Tope máximo hasta maxPrice
           if (p.price <= maxPrice) {
-            score += 22;
+            score += 25;
             matchedCriteria.push(
               `Dentro de presupuesto (${p.currency} ${p.price.toLocaleString()})`
             );
-          } else if (p.price <= maxPrice * 1.2) {
+          } else if (p.price <= maxPrice * 1.25) {
             score += 10;
             matchedCriteria.push(
               `Cercano al presupuesto (${p.currency} ${p.price.toLocaleString()})`
@@ -837,14 +850,14 @@ export function buildFlexibleSmartSearch(
           score += 6;
           matchedCriteria.push(`${p.rooms} ambientes`);
         } else {
-          score -= 12;
+          score -= 8;
         }
       } else if (minRooms > 1) {
         if (p.rooms >= minRooms) {
           score += 10;
           matchedCriteria.push(`${p.rooms} ambientes`);
         } else {
-          score -= 10;
+          score -= 8;
         }
       }
 
@@ -860,7 +873,7 @@ export function buildFlexibleSmartSearch(
           ? ['cochera', 'garage', 'estacionamiento']
           : [normalizeSearchText(feat.split(' ')[0])];
         if (keywords.some((kw) => propFullNorm.includes(kw))) {
-          score += 10;
+          score += 12;
           matchedCriteria.push(feat);
         }
       });
@@ -878,18 +891,18 @@ export function buildFlexibleSmartSearch(
                 `${p.currency} ${p.price.toLocaleString()}`,
                 `${p.surface} m²`,
               ],
-        explanation: `Coincide con tu búsqueda porque ofrece ${
+        explanation: `Ofrece ${
           matchedCriteria.length > 0
             ? matchedCriteria.join(', ')
             : `${p.propertyType} en ${p.location} por ${p.currency} ${p.price.toLocaleString()}`
         }.${
           p.features && p.features.length > 0
-            ? ` Cuenta además con ${p.features.slice(0, 3).join(', ')}.`
+            ? ` Cuenta con ${p.features.slice(0, 3).join(', ')}.`
             : ''
         }`,
       };
     })
-    .filter((item) => item.matchScore >= 55 && !item.hardMismatch)
+    .filter((item) => item.matchScore >= 50 && !item.hardMismatch)
     .sort((a, b) => b.matchScore - a.matchScore);
 
   const finalRecs = scored.map(({ hardMismatch, ...rest }) => rest);
