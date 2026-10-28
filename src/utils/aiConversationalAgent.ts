@@ -25,6 +25,7 @@ export interface ExtractedSearchCriteria {
   isExploringOtherZones?: boolean;
   resetTriggered?: boolean;
   locationNotFound?: boolean;
+  mentionedOtherCurrency?: boolean;
 }
 
 export interface PropertyMatchAlternative {
@@ -1762,6 +1763,7 @@ export function isPureGreetingMessage(text: string): boolean {
 
   const greetings = [
     'hola',
+    'hello',
     'buen dia',
     'buenos dias',
     'buenas tardes',
@@ -1976,6 +1978,8 @@ export function isDeclineOrGoodbyeMessage(text: string): boolean {
     'gracias chau',
     'chau gracias',
     'gracias adios',
+    'listo',
+    'No quiero mas informacion'
   ];
   if (goodbyes.some((g) => qNorm.includes(g))) {
     return true;
@@ -2025,6 +2029,34 @@ export function isDeclineOrGoodbyeMessage(text: string): boolean {
       !qNorm.includes('pileta') &&
       !qNorm.includes('cochera')
     ) {
+      return true;
+    }
+  }
+
+  // Expresiones de agradecimiento y cierre (ej. "gracias", "muchas gracias", "te agradezco") sin intención de nueva búsqueda
+  const gratitudeTerms = ['gracias','ok','bueno','adios','mil gracias', 'te agradezco', 'muy amable'];
+  const hasGratitude = gratitudeTerms.some((t) => qNorm.includes(t));
+  if (hasGratitude) {
+    const hasSearchIntent =
+      qNorm.includes('busco') ||
+      qNorm.includes('quiero') ||
+      qNorm.includes('tenes') ||
+      qNorm.includes('tienen') ||
+      qNorm.includes('hay') ||
+      qNorm.includes('alquilar') ||
+      qNorm.includes('comprar') ||
+      qNorm.includes('departamento') ||
+      qNorm.includes('casa') ||
+      qNorm.includes('ph') ||
+      qNorm.includes('zona') ||
+      qNorm.includes('barrio') ||
+      qNorm.includes('caba') ||
+      qNorm.includes('quilmes') ||
+      qNorm.includes('palermo') ||
+      qNorm.includes('belgrano') ||
+      qNorm.includes('recoleta');
+
+    if (!hasSearchIntent) {
       return true;
     }
   }
@@ -2376,7 +2408,7 @@ export function buildLocationNotFoundMotive(
         : criteria.propertyType === 'casa'
         ? 'casas'
         : criteria.propertyType;
-    parts.push(`ser ${typePlural}`);
+    parts.push(` ${typePlural}`);
   }
 
   if (criteria.operationType) {
@@ -2447,7 +2479,7 @@ export function buildConciseAlternativeConclusion(
   }
 
   if (missing.some((m) => m.toLowerCase().includes('precio') || m.toLowerCase().includes('presupuesto'))) {
-    return 'Cumplen con la zona y comodidades solicitadas, con una ligera diferencia respecto al presupuesto inicial.';
+    return 'Cumplen con la zona y comodidades solicitadas, con una diferencia respecto al presupuesto inicial.';
   }
 
   if (missing.some((m) => m.toLowerCase().includes('pileta') || m.toLowerCase().includes('patio') || m.toLowerCase().includes('cochera'))) {
@@ -2678,7 +2710,7 @@ export function buildAgentConversationReply(
   // Acknowledgment if previous requirement was just answered
   let acknowledgment = '';
   if (previousCriteria && !previousCriteria.operationType && criteria.operationType) {
-    acknowledgment = `¡Perfecto! Buscando propiedades para ${criteria.operationType === 'venta' ? 'compra' : 'alquiler'}. `;
+    acknowledgment = `¡Perfecto! `;
   } else if (previousCriteria && (!previousCriteria.locations || previousCriteria.locations.length === 0) && criteria.locations && criteria.locations.length > 0) {
     acknowledgment = `¡Entendido! Buscando en ${criteria.locations.join(', ')}. `;
   } else if (
@@ -2695,7 +2727,7 @@ export function buildAgentConversationReply(
   // 3. Intención de coordinar o consultar cómo hacer una visita presencial
   if (isVisitSchedulingIntent(userQuery)) {
     return {
-      message: `¡Coordinar una visita es muy sencillo desde la plataforma!\n\nPara agendarla:\n1. Hacé clic en la publicación o botón «Ver Ficha Completa» de la propiedad que te interese.\n2. En la ficha, presioná el botón «Agendar visita».\n3. Seleccioná la fecha y el horario que te quede más cómodo, y si querés agregá una nota o consulta.\n4. Enviás la solicitud y el equipo se pondrá en contacto para confirmar el turno.\n\n¿Te gustaría consultar algún detalle sobre las propiedades o preferís buscar opciones en otra zona?`,
+      message: `¡Coordinar una visita es muy sencillo desde la plataforma!\n\nPara agendarla:\n1. Hacé clic en la publicación o botón «Ver Ficha Completa» de la propiedad que te interese.\n2. En la ficha, presioná el botón «Agendar visita».\n3. Seleccioná la fecha y el horario que te quede más cómodo, y si querés agregá una nota o consulta.\n4. Enviás la solicitud y el equipo se pondrá en contacto para confirmar el turno.`,
     };
   }
 
@@ -2792,11 +2824,36 @@ export function buildAgentConversationReply(
         return ev.isExact;
       });
 
+    // Verificamos qué aspectos no coincidieron exactamente
+    const locMismatch = criteria.locationNotFound || !hasRequestedInCatalog || !allInRequestedLoc;
+    const budgetMismatch = Boolean(criteria.maxPrice) && alternativeMatches.some(a => a.missingReasons?.some(m => m.toLowerCase().includes('precio') || m.toLowerCase().includes('presupuesto') || m.toLowerCase().includes('valor')) || a.property.price > (criteria.maxPrice || 0));
+    const featuresMismatch = Boolean(criteria.requiredFeatures && criteria.requiredFeatures.length > 0) && alternativeMatches.some(a => a.missingReasons && a.missingReasons.length > 0);
+
+    const mismatchParts: string[] = [];
+    if (locMismatch) {
+      mismatchParts.push('en cuanto a la ubicación');
+    }
+    if (budgetMismatch) {
+      mismatchParts.push('en cuanto al monto o presupuesto');
+    }
+    if (featuresMismatch) {
+      mismatchParts.push('en cuanto a algunas de las características solicitadas');
+    }
+
+    let mismatchDesc = 'en cuanto a la ubicación';
+    if (mismatchParts.length === 1) {
+      mismatchDesc = mismatchParts[0];
+    } else if (mismatchParts.length === 2) {
+      mismatchDesc = `${mismatchParts[0]} y ${mismatchParts[1].replace('en cuanto a ', '')}`;
+    } else if (mismatchParts.length >= 3) {
+      mismatchDesc = `${mismatchParts.slice(0, -1).join(', ')} y ${mismatchParts[mismatchParts.length - 1].replace('en cuanto a ', '')}`;
+    }
+
     // Caso 1: La localidad solicitada NO existe en el catálogo o no hay propiedades en esa ubicación
     if (criteria.locationNotFound || !hasRequestedInCatalog) {
       const motive = buildLocationNotFoundMotive(criteria, alternativeMatches, false);
       return {
-        message: `${acknowledgment}Por el momento no disponemos de propiedades en esa dirección que buscás (${requestedLoc || 'esa zona'}) en nuestro catálogo.\n\nAunque no coincidió con los requisitos que querés en cuanto a la ubicación, te puedo dar algunas opciones que cumplen con algunas de las necesidades que fuiste mencionando, como ${motive}, disponibles en ${altZonesText}.\n\nTe invito a revisar estas alternativas. Si alguna te interesa, te puedo brindar más detalles o explicarte cómo agendar una visita. ¿Te gustaría consultar alguna de ellas o preferís probar buscando en otra zona?`,
+        message: `${acknowledgment}Por el momento no disponemos de propiedades en esa dirección que buscás (${requestedLoc || 'esa zona'}) en nuestro catálogo.\n\nAunque no coincidió con los requisitos que querés ${mismatchDesc}, te puedo dar algunas opciones que cumplen con algunas de las necesidades que fuiste mencionando, como ${motive}, disponibles en ${altZonesText}.\n\nTe invito a revisar estas alternativas.`,
       };
     }
 
@@ -2806,7 +2863,7 @@ export function buildAgentConversationReply(
       const opText = criteria.operationType ? ` para ${criteria.operationType === 'venta' ? 'compra' : 'alquiler'}` : '';
       const typeText = criteria.propertyType ? ` de tipo ${criteria.propertyType}` : '';
       return {
-        message: `${acknowledgment}En ${requestedLoc} no contamos actualmente con publicaciones${opText}${typeText} que coincidan con todos tus requisitos, pero seleccioné alternativas disponibles en zonas como ${altZonesText} que cumplen con ${motive}.\n\nTe invito a revisar estas opciones. Si alguna te interesa, puedo ayudarte a conocer más detalles o coordinar una visita. ¿Te gustaría consultar alguna de ellas o preferís ver opciones en otra zona?`,
+        message: `${acknowledgment}En ${requestedLoc} no contamos actualmente con publicaciones${opText}${typeText} que coincidan con todos tus requisitos (${mismatchDesc}), pero seleccioné alternativas disponibles en zonas como ${altZonesText} que cumplen con ${motive}.\n\nTe invito a visitar estas opciones.`,
       };
     }
 
@@ -2818,7 +2875,7 @@ export function buildAgentConversationReply(
     if (missing.some((m) => m.toLowerCase().includes('venta') || m.toLowerCase().includes('alquiler') || m.toLowerCase().includes('operacion'))) {
       differenceExplanation = `se encuentran en ${requestedLoc} y cuentan con excelentes comodidades, aunque la publicación disponible es para ${firstAlt.property.operationType}`;
     } else if (missing.some((m) => m.toLowerCase().includes('precio') || m.toLowerCase().includes('presupuesto'))) {
-      differenceExplanation = `cumplen con la zona y comodidades en ${requestedLoc}, con una ligera diferencia respecto al presupuesto inicial`;
+      differenceExplanation = `cumplen con la zona y comodidades en ${requestedLoc}, sin embargo presentan una diferencia respecto al presupuesto inicial`;
     } else if (missing.some((m) => m.toLowerCase().includes('pileta') || m.toLowerCase().includes('patio') || m.toLowerCase().includes('cochera'))) {
       differenceExplanation = `están ubicadas en ${requestedLoc} y en precio, aunque difieren en alguna comodidad requerida`;
     } else if (missing.some((m) => m.toLowerCase().includes('dormitorio') || m.toLowerCase().includes('ambiente'))) {
@@ -2826,7 +2883,7 @@ export function buildAgentConversationReply(
     }
 
     return {
-      message: `${acknowledgment}No encontré propiedades que coincidan al 100% con todos los requisitos en ${requestedLoc}, pero seleccioné alternativas disponibles en esta zona que te pueden servir:\n\n${differenceExplanation.charAt(0).toUpperCase() + differenceExplanation.slice(1)}.\n\nTe invito a revisar estas opciones. Si alguna te interesa, puedo ayudarte a conocer más detalles o coordinar una visita. ¿Te gustaría consultar alguna de ellas o preferís ver opciones en otra zona?`,
+      message: `${acknowledgment}No encontré propiedades que coincidan al 100% con todos los requisitos en ${requestedLoc}, pero seleccioné alternativas disponibles en esta zona que te pueden servir:\n\n${differenceExplanation.charAt(0).toUpperCase() + differenceExplanation.slice(1)}.\n\nTe invito a revisar estas opciones.`,
     };
   }
 
