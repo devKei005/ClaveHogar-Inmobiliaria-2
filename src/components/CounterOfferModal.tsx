@@ -66,7 +66,7 @@ export const CounterOfferModal: React.FC<CounterOfferModalProps> = ({
           <div className="flex items-center gap-2.5">
             <RefreshCw className="w-5 h-5 text-[#D5BFA0]" />
             <div>
-              <h2 className="text-lg font-serif-display font-semibold">
+              <h2 className="text-lg font-serif-display font-semibold text-white">
                 Proponer Otros Términos (Contrapropuesta)
               </h2>
               <p className="text-xs text-[#D5BFA0]">

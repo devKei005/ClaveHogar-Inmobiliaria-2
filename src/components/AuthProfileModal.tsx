@@ -277,10 +277,10 @@ export const AuthProfileModal: React.FC<AuthProfileModalProps> = ({
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-5 bg-[#173B43] text-[#FCFBF7]">
           <div>
-            <span className="text-[10px] uppercase tracking-[0.2em] text-[#D5BFA0] block">
+            <span className="text-[10px] uppercase tracking-[0.2em] text-[#D5BFA0] font-semibold block">
               ClaveHogar
             </span>
-            <h2 className="text-xl font-serif-display font-semibold">
+            <h2 className="text-xl font-serif-display font-semibold text-white">
               {mode === 'login' && 'Iniciar sesión'}
               {mode === 'register' && 'Crear cuenta'}
               {mode === 'recover' && 'Recuperar contraseña'}

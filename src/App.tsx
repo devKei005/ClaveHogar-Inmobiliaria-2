@@ -14,6 +14,7 @@ import {
   User,
   Sparkles,
   Edit3,
+  Trash2,
   CheckCircle2,
   XCircle,
   Info,
@@ -225,8 +226,10 @@ export default function App() {
   // Hero Carousel state
   const [heroShowcaseIdx, setHeroShowcaseIdx] = useState(0);
 
-  // Selected property detail & form modals
+  // Selected property detail, deletion & form modals
   const [selectedProperty, setSelectedProperty] = useState<PropertyItem | null>(null);
+  const [propertyToDelete, setPropertyToDelete] = useState<PropertyItem | null>(null);
+  const [isDeletingProperty, setIsDeletingProperty] = useState(false);
   const [isPropertyFormOpen, setIsPropertyFormOpen] = useState(false);
   const [editingProperty, setEditingProperty] = useState<PropertyItem | null>(null);
 
@@ -1439,9 +1442,14 @@ export default function App() {
       notify('error', 'Sin permisos', 'Solo el propietario titular o el administrador pueden eliminar esta publicación.');
       return;
     }
-    if (!window.confirm(`¿Eliminar la publicación "${target.title}"? Esta acción no se puede deshacer.`)) {
-      return;
-    }
+    setPropertyToDelete(target);
+  };
+
+  const handleConfirmDeleteProperty = async () => {
+    if (!propertyToDelete || !currentUser) return;
+    const propertyId = propertyToDelete.id;
+    const title = propertyToDelete.title;
+    setIsDeletingProperty(true);
 
     try {
       await deleteDoc(doc(db, 'properties', propertyId));
@@ -1449,10 +1457,17 @@ export default function App() {
       if (selectedProperty?.id === propertyId) {
         setSelectedProperty(null);
       }
-      notify('success', 'Propiedad eliminada correctamente', 'El inmueble fue eliminado de Firebase Firestore.');
+      setPropertyToDelete(null);
+      notify(
+        'success',
+        'Propiedad eliminada correctamente',
+        `La publicación "${title}" fue eliminada de la base de datos Firestore.`
+      );
     } catch (err) {
       notify('error', 'Error al eliminar la propiedad', 'No se pudo eliminar el documento de Firestore.');
       handleFirestoreError(err, OperationType.DELETE, `properties/${propertyId}`);
+    } finally {
+      setIsDeletingProperty(false);
     }
   };
 
@@ -3991,6 +4006,7 @@ export default function App() {
             setEditingProperty(prop);
             setIsPropertyFormOpen(true);
           }}
+          onDeleteProperty={handleDeleteProperty}
           onRequireLogin={() => openAuthModal('login')}
           onToggleFavorite={handleToggleFavorite}
           onToggleCompare={handleToggleCompare}
@@ -3999,6 +4015,66 @@ export default function App() {
           onRequestOperation={handleRequestOperation}
           onNotify={notify}
         />
+      )}
+
+      {/* Cartel Modal de Confirmación para Eliminar Propiedad de la Base de Datos */}
+      {propertyToDelete && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-[#1F241F]/70 p-4 overflow-y-auto backdrop-blur-xs">
+          <div className="relative w-full max-w-lg bg-[#FCFBF7] border-2 border-[#173B43] rounded-md overflow-hidden my-8 shadow-2xl flex flex-col">
+            {/* Header */}
+            <div className="flex items-center justify-between px-6 py-4 bg-[#173B43] text-white">
+              <div className="flex items-center gap-2.5">
+                <Trash2 className="w-5 h-5 text-[#D5BFA0]" />
+                <h3 className="text-base font-serif-display font-semibold text-white">
+                  Confirmar eliminación
+                </h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setPropertyToDelete(null)}
+                disabled={isDeletingProperty}
+                className="p-1 text-[#D5BFA0] hover:text-white rounded-sm hover:bg-white/10 transition-colors cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Body */}
+            <div className="p-6 space-y-5 text-[#303638]">
+              <p className="text-sm font-bold text-[#173B43] leading-relaxed">
+                ¿Eliminar la publicación &ldquo;{propertyToDelete.title}&rdquo;? Esta acción no se puede deshacer.
+              </p>
+
+              <div className="p-3.5 bg-amber-50/90 border border-amber-300 rounded-sm text-xs text-amber-950 space-y-1">
+                <div className="font-bold text-[#173B43]">Advertencia de borrado de base de datos:</div>
+                <p className="leading-relaxed text-[#303638]/90">
+                  El inmueble será eliminado de manera permanente y se retirará automáticamente del catálogo público y de los paneles de gestión.
+                </p>
+              </div>
+
+              {/* Actions */}
+              <div className="flex items-center justify-end gap-2.5 pt-4 border-t border-[#D5BFA0]">
+                <button
+                  type="button"
+                  onClick={() => setPropertyToDelete(null)}
+                  disabled={isDeletingProperty}
+                  className="px-4 py-2 text-xs font-bold text-[#173B43] bg-white border border-[#D5BFA0] rounded-sm hover:bg-[#F8F6F1] cursor-pointer"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="button"
+                  onClick={handleConfirmDeleteProperty}
+                  disabled={isDeletingProperty}
+                  className="px-4.5 py-2 text-xs font-bold text-white bg-red-600 rounded-sm hover:bg-red-700 disabled:opacity-50 cursor-pointer shadow-xs inline-flex items-center gap-1.5"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  {isDeletingProperty ? 'Eliminando...' : 'Eliminar publicación'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
       )}
 
       <PropertyFormModal

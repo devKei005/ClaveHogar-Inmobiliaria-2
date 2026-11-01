@@ -9,7 +9,9 @@ import {
   Send,
   ArrowLeft,
   Edit3,
+  Trash2,
   Clock,
+  AlertTriangle,
 } from 'lucide-react';
 import {
   PropertyItem,
@@ -22,6 +24,7 @@ import {
 import { HERO_IMAGE, resolvePropertyImages } from '../data/initialData';
 import {
   canUserEditProperty,
+  isUserOwnerOfProperty,
   isUserAssignedAgentOfProperty,
   getMinVisitDate,
 } from '../utils/propertyPermissions';
@@ -36,6 +39,7 @@ interface PropertyDetailModalProps {
   inquiries: InquiryItem[];
   onClose: () => void;
   onOpenEditProperty?: (property: PropertyItem) => void;
+  onDeleteProperty?: (propertyId: string) => void;
   onRequireLogin: () => void;
   onToggleFavorite: (propertyId: string) => void;
   onToggleCompare: (propertyId: string) => void;
@@ -77,6 +81,7 @@ export const PropertyDetailModal: React.FC<PropertyDetailModalProps> = ({
   inquiries,
   onClose,
   onOpenEditProperty,
+  onDeleteProperty,
   onRequireLogin,
   onToggleFavorite,
   onToggleCompare,
@@ -109,6 +114,18 @@ export const PropertyDetailModal: React.FC<PropertyDetailModalProps> = ({
     (!property.agentAssignmentStatus || property.agentAssignmentStatus === 'asignado');
   const activeAgentName = isConfirmedAgent ? property.agentName : '';
 
+  const isOwnerOfProperty = Boolean(
+    currentUser &&
+      (currentUser.uid === property.ownerId ||
+        (users && isUserOwnerOfProperty(property, currentUser, users)))
+  );
+  const isAgentOfProperty = Boolean(
+    currentUser &&
+      ((isConfirmedAgent && currentUser.uid === property.agentId) ||
+        (users && isUserAssignedAgentOfProperty(property, currentUser, users)))
+  );
+  const isOwnerOrAgent = isOwnerOfProperty || isAgentOfProperty;
+
   const propertyInquiries = inquiries.filter((inq) => {
     if (inq.propertyId !== property.id) return false;
     if (!currentUser) return false;
@@ -137,6 +154,16 @@ export const PropertyDetailModal: React.FC<PropertyDetailModalProps> = ({
     if (!currentUser) {
       onNotify('info', 'Iniciá sesión para reservar', 'Debés iniciar sesión con tu cuenta para agendar una visita.');
       onRequireLogin();
+      return;
+    }
+    if (isOwnerOrAgent) {
+      onNotify(
+        'error',
+        'Acción no permitida',
+        isOwnerOfProperty
+          ? 'Como propietario titular de esta publicación, no podés agendar una visita sobre tu propia propiedad.'
+          : 'Como agente inmobiliario a cargo de esta publicación, no podés agendar una visita sobre esta propiedad.'
+      );
       return;
     }
     if (!visitDate || !visitSlot) {
@@ -195,6 +222,16 @@ export const PropertyDetailModal: React.FC<PropertyDetailModalProps> = ({
     if (!currentUser) {
       onNotify('info', 'Iniciá sesión para solicitar', 'Iniciá sesión para enviar una propuesta formal.');
       onRequireLogin();
+      return;
+    }
+    if (isOwnerOrAgent) {
+      onNotify(
+        'error',
+        'Acción no permitida',
+        isOwnerOfProperty
+          ? 'Como propietario titular de esta publicación, no podés enviar una oferta de compra o alquiler sobre tu propia propiedad.'
+          : 'Como agente inmobiliario a cargo de esta publicación, no podés enviar una propuesta sobre esta propiedad.'
+      );
       return;
     }
 
@@ -263,6 +300,19 @@ export const PropertyDetailModal: React.FC<PropertyDetailModalProps> = ({
               >
                 <Edit3 className="w-3.5 h-3.5" />
                 <span>Editar Propiedad</span>
+              </button>
+            )}
+            {(currentUser?.role === 'administrador' || isOwnerOfProperty) && onDeleteProperty && (
+              <button
+                type="button"
+                onClick={() => {
+                  onDeleteProperty(property.id);
+                }}
+                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-sm bg-red-600 hover:bg-red-700 text-white border border-red-600 transition-colors whitespace-nowrap cursor-pointer shadow-xs"
+                title="Eliminar esta propiedad"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                <span>Eliminar</span>
               </button>
             )}
             <button
@@ -541,6 +591,20 @@ export const PropertyDetailModal: React.FC<PropertyDetailModalProps> = ({
               {/* Tab 1: Solicitud de Visita */}
               {activeTab === 'visita' && (
                 <form onSubmit={handleVisitSubmit} className="space-y-4">
+                  {isOwnerOrAgent && (
+                    <div className="p-3 bg-amber-50 border border-amber-300 rounded-sm text-xs text-amber-900 space-y-1">
+                      <div className="font-bold flex items-center gap-1.5">
+                        <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
+                        <span>Propiedad propia o a tu cargo</span>
+                      </div>
+                      <p className="leading-relaxed">
+                        {isOwnerOfProperty
+                          ? 'Sos el propietario titular de esta publicación. No podés agendar visitas sobre tu propia propiedad.'
+                          : 'Sos el agente inmobiliario a cargo de esta publicación. No podés agendar visitas sobre esta propiedad.'}
+                      </p>
+                    </div>
+                  )}
+
                   <div className="space-y-1">
                     <div className="flex items-center justify-between">
                       <label className="block text-xs font-semibold text-[#173B43]">
@@ -553,10 +617,11 @@ export const PropertyDetailModal: React.FC<PropertyDetailModalProps> = ({
                     <input
                       type="date"
                       required
+                      disabled={isOwnerOrAgent}
                       value={visitDate}
                       min={minVisitDate}
                       onChange={(e) => setVisitDate(e.target.value)}
-                      className="w-full px-3.5 py-2.5 text-sm bg-[#FCFBF7] border border-[#D5BFA0] rounded-sm font-tabular focus:outline-none focus:border-[#173B43]"
+                      className="w-full px-3.5 py-2.5 text-sm bg-[#FCFBF7] border border-[#D5BFA0] rounded-sm font-tabular focus:outline-none focus:border-[#173B43] disabled:opacity-60"
                     />
                     <p className="text-[11px] text-[#173B43]/80 font-medium flex items-center gap-1.5 pt-0.5">
                       <Clock className="w-3.5 h-3.5 text-[#B86F52] shrink-0" />
@@ -568,9 +633,10 @@ export const PropertyDetailModal: React.FC<PropertyDetailModalProps> = ({
                       Franja horaria disponible
                     </label>
                     <select
+                      disabled={isOwnerOrAgent}
                       value={visitSlot}
                       onChange={(e) => setVisitSlot(e.target.value)}
-                      className="w-full px-3.5 py-2.5 text-sm bg-[#FCFBF7] border border-[#D5BFA0] rounded-sm focus:outline-none focus:border-[#173B43]"
+                      className="w-full px-3.5 py-2.5 text-sm bg-[#FCFBF7] border border-[#D5BFA0] rounded-sm focus:outline-none focus:border-[#173B43] disabled:opacity-60"
                     >
                       {AVAILABLE_TIME_SLOTS.map((slot) => (
                         <option key={slot} value={slot}>
@@ -585,20 +651,23 @@ export const PropertyDetailModal: React.FC<PropertyDetailModalProps> = ({
                     </label>
                     <textarea
                       rows={2}
+                      disabled={isOwnerOrAgent}
                       maxLength={SCHEMA_LIMITS.VISIT_NOTES_MAX}
                       value={visitNotes}
                       onChange={(e) => setVisitNotes(e.target.value)}
                       placeholder="Indicá tus preferencias o consultas para el recorrido..."
-                      className="w-full px-3.5 py-2 text-sm bg-[#FCFBF7] border border-[#D5BFA0] rounded-sm focus:outline-none focus:border-[#173B43]"
+                      className="w-full px-3.5 py-2 text-sm bg-[#FCFBF7] border border-[#D5BFA0] rounded-sm focus:outline-none focus:border-[#173B43] disabled:opacity-60"
                     />
                   </div>
                   <button
                     type="submit"
-                    disabled={submitting || property.availability === 'alquilada' || property.availability === 'vendida'}
-                    className="w-full py-3 px-4 text-xs uppercase tracking-widest font-semibold text-[#FCFBF7] bg-[#173B43] hover:bg-[#2c382d] disabled:opacity-50 rounded-sm transition-colors"
+                    disabled={submitting || isOwnerOrAgent || property.availability === 'alquilada' || property.availability === 'vendida'}
+                    className="w-full py-3 px-4 text-xs uppercase tracking-widest font-semibold text-[#FCFBF7] bg-[#173B43] hover:bg-[#122e35] disabled:opacity-50 rounded-sm transition-colors cursor-pointer shadow-xs"
                   >
                     {submitting
                       ? 'Guardando reserva...'
+                      : isOwnerOrAgent
+                      ? 'No disponible (Propiedad propia)'
                       : property.availability === 'disponible' || property.availability === 'reservada'
                       ? 'Confirmar Solicitud de Visita'
                       : 'Propiedad no disponible'}
@@ -609,6 +678,20 @@ export const PropertyDetailModal: React.FC<PropertyDetailModalProps> = ({
               {/* Tab 2: Formulario del Cliente - Propuesta de Alquiler / Compra */}
               {activeTab === 'operacion' && (
                 <form onSubmit={handleOperationSubmit} className="space-y-4">
+                  {isOwnerOrAgent && (
+                    <div className="p-3 bg-amber-50 border border-amber-300 rounded-sm text-xs text-amber-900 space-y-1">
+                      <div className="font-bold flex items-center gap-1.5">
+                        <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
+                        <span>Propiedad propia o a tu cargo</span>
+                      </div>
+                      <p className="leading-relaxed">
+                        {isOwnerOfProperty
+                          ? 'Sos el propietario titular de esta publicación. No podés enviar ofertas de compra o alquiler sobre tu propia propiedad.'
+                          : 'Sos el agente inmobiliario a cargo de esta publicación. No podés enviar ofertas sobre esta propiedad.'}
+                      </p>
+                    </div>
+                  )}
+
                   {/* Reference Published Price Box */}
                   <div className="p-3 bg-[#F8F6F1] border border-[#D5BFA0] rounded-sm text-xs space-y-0.5">
                     <span className="text-[10px] uppercase font-bold text-[#B86F52] block">
@@ -631,18 +714,20 @@ export const PropertyDetailModal: React.FC<PropertyDetailModalProps> = ({
                       <input
                         type="number"
                         required
+                        disabled={isOwnerOrAgent}
                         min={1}
                         value={offeredAmount}
                         onChange={(e) => setOfferedAmount(e.target.value)}
-                        className="w-full px-3.5 py-2 text-sm bg-[#FCFBF7] border border-[#D5BFA0] rounded-sm font-tabular focus:outline-none focus:border-[#173B43]"
+                        className="w-full px-3.5 py-2 text-sm bg-[#FCFBF7] border border-[#D5BFA0] rounded-sm font-tabular focus:outline-none focus:border-[#173B43] disabled:opacity-60"
                       />
                     </div>
                     <div className="space-y-1">
                       <label className="block text-xs font-semibold text-[#173B43]">Moneda *</label>
                       <select
+                        disabled={isOwnerOrAgent}
                         value={offeredCurrency}
                         onChange={(e) => setOfferedCurrency(e.target.value as 'USD' | 'ARS')}
-                        className="w-full px-3.5 py-2 text-sm bg-[#FCFBF7] border border-[#D5BFA0] rounded-sm focus:outline-none focus:border-[#173B43]"
+                        className="w-full px-3.5 py-2 text-sm bg-[#FCFBF7] border border-[#D5BFA0] rounded-sm focus:outline-none focus:border-[#173B43] disabled:opacity-60"
                       >
                         <option value="USD">USD</option>
                         <option value="ARS">ARS</option>
@@ -658,9 +743,10 @@ export const PropertyDetailModal: React.FC<PropertyDetailModalProps> = ({
                           Tipo de Garantía Propuesta *
                         </label>
                         <select
+                          disabled={isOwnerOrAgent}
                           value={guaranteeType}
                           onChange={(e) => setGuaranteeType(e.target.value)}
-                          className="w-full px-3.5 py-2 text-xs bg-[#FCFBF7] border border-[#D5BFA0] rounded-sm focus:outline-none focus:border-[#173B43]"
+                          className="w-full px-3.5 py-2 text-xs bg-[#FCFBF7] border border-[#D5BFA0] rounded-sm focus:outline-none focus:border-[#173B43] disabled:opacity-60"
                         >
                           <option value="Garantía Propietaria CABA/GBA">Garantía Propietaria CABA / GBA</option>
                           <option value="Seguro de Caución Finaer / Premiar">Seguro de Caución (Finaer / Premiar)</option>
@@ -680,9 +766,10 @@ export const PropertyDetailModal: React.FC<PropertyDetailModalProps> = ({
                             min={1}
                             step={1}
                             required
+                            disabled={isOwnerOrAgent}
                             value={desiredTermMonths}
                             onChange={(e) => setDesiredTermMonths(Math.max(1, parseInt(e.target.value, 10) || 1))}
-                            className="w-full px-3.5 py-2 text-xs bg-[#FCFBF7] border border-[#D5BFA0] rounded-sm font-tabular focus:outline-none focus:border-[#173B43]"
+                            className="w-full px-3.5 py-2 text-xs bg-[#FCFBF7] border border-[#D5BFA0] rounded-sm font-tabular focus:outline-none focus:border-[#173B43] disabled:opacity-60"
                           />
                           <span className="text-xs font-semibold text-[#173B43] shrink-0">
                             meses
@@ -697,9 +784,10 @@ export const PropertyDetailModal: React.FC<PropertyDetailModalProps> = ({
                         Forma de Pago Propuesta *
                       </label>
                       <select
+                        disabled={isOwnerOrAgent}
                         value={paymentMethod}
                         onChange={(e) => setPaymentMethod(e.target.value)}
-                        className="w-full px-3.5 py-2 text-xs bg-[#FCFBF7] border border-[#D5BFA0] rounded-sm focus:outline-none focus:border-[#173B43]"
+                        className="w-full px-3.5 py-2 text-xs bg-[#FCFBF7] border border-[#D5BFA0] rounded-sm focus:outline-none focus:border-[#173B43] disabled:opacity-60"
                       >
                         <option value="Contado efectivo al boleto">Contado efectivo al boleto / escritura</option>
                         <option value="Transferencia bancaria">Transferencia bancaria internacional / local</option>
@@ -717,6 +805,7 @@ export const PropertyDetailModal: React.FC<PropertyDetailModalProps> = ({
                     </label>
                     <textarea
                       rows={3}
+                      disabled={isOwnerOrAgent}
                       maxLength={SCHEMA_LIMITS.OP_MESSAGE_MAX}
                       value={operationMessage}
                       onChange={(e) => setOperationMessage(e.target.value)}
@@ -725,17 +814,19 @@ export const PropertyDetailModal: React.FC<PropertyDetailModalProps> = ({
                           ? 'Detallá fecha de ingreso deseada, mascotas, expensas o condiciones particulares...'
                           : 'Detallá plazo de escrituración, vigencia de la propuesta, gastos de escritura...'
                       }
-                      className="w-full px-3.5 py-2 text-xs bg-[#FCFBF7] border border-[#D5BFA0] rounded-sm focus:outline-none focus:border-[#173B43]"
+                      className="w-full px-3.5 py-2 text-xs bg-[#FCFBF7] border border-[#D5BFA0] rounded-sm focus:outline-none focus:border-[#173B43] disabled:opacity-60"
                     />
                   </div>
 
                   <button
                     type="submit"
-                    disabled={submitting || property.availability === 'alquilada' || property.availability === 'vendida'}
+                    disabled={submitting || isOwnerOrAgent || property.availability === 'alquilada' || property.availability === 'vendida'}
                     className="w-full py-3 px-4 text-xs uppercase tracking-widest font-semibold text-[#FCFBF7] bg-[#B86F52] hover:bg-[#9e5b40] disabled:opacity-50 rounded-sm transition-colors cursor-pointer shadow-xs"
                   >
                     {submitting
                       ? 'Enviando propuesta...'
+                      : isOwnerOrAgent
+                      ? 'No disponible (Propiedad propia o a tu cargo)'
                       : property.availability === 'disponible' || property.availability === 'reservada'
                       ? `Enviar Propuesta de ${property.operationType === 'alquiler' ? 'Alquiler' : 'Compra'}`
                       : 'Propiedad no disponible'}

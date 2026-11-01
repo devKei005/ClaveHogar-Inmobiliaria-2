@@ -202,7 +202,7 @@ export const ContractRegistrationModal: React.FC<ContractRegistrationModalProps>
           <div className="flex items-center gap-2.5">
             <FileCheck className="w-6 h-6 text-[#D5BFA0]" />
             <div>
-              <h2 className="text-xl font-serif-display font-semibold">
+              <h2 className="text-xl font-serif-display font-semibold text-white">
                 Registrar Contrato Definitivo y Concretar Operación
               </h2>
               <p className="text-xs text-[#D5BFA0]">

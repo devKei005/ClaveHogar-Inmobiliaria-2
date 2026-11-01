@@ -475,7 +475,7 @@ export const PropertyFormModal: React.FC<PropertyFormModalProps> = ({
             <span className="text-[11px] uppercase tracking-[0.2em] text-[#D5BFA0] font-semibold block">
               Mis Propiedades · ClaveHogar
             </span>
-            <h2 className="text-xl font-serif-display font-semibold">
+            <h2 className="text-xl font-serif-display font-semibold text-white">
               {editingProperty
                 ? 'Editar Propiedad Registrada'
                 : 'Publicar Nueva Propiedad'}

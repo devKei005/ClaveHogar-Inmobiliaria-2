@@ -3606,59 +3606,90 @@ export const RoleWorkspaceView: React.FC<RoleWorkspaceViewProps> = ({
                       key={prop.id}
                       className="p-5 bg-amber-50/60 border-2 border-amber-300 rounded-sm space-y-4"
                     >
-                      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
-                        <div className="flex items-start gap-3.5">
-                          <img
-                            src={resolvePropertyImageUrl(prop.images[0])}
-                            alt={prop.title}
-                            referrerPolicy="no-referrer"
-                            onError={(e) => {
-                              if (e.currentTarget.src !== HERO_IMAGE) {
-                                e.currentTarget.src = HERO_IMAGE;
-                              }
-                            }}
-                            className="w-20 h-15 rounded-sm object-cover bg-[#D5BFA0] shrink-0"
-                          />
-                          <div className="space-y-1">
-                            <div className="flex flex-wrap items-center gap-2 text-xs">
-                              <span
-                                className={`inline-flex items-center gap-1 text-[10px] uppercase tracking-wider font-bold px-2.5 py-0.5 rounded-sm border ${getPublicationStatusBadgeClass(
-                                  prop.publicationStatus
-                                )}`}
-                              >
-                                {prop.publicationStatus === 'pendiente'
-                                  ? 'Publicación: En Revisión (Pendiente)'
-                                  : prop.publicationStatus === 'aprobada'
-                                  ? 'Publicación: Ya Aprobada'
-                                  : 'Publicación: Rechazada'}
+                      {/* Título de la casa en una línea independiente ocupando toda la tarjeta */}
+                      <div className="w-full pb-2.5 border-b border-amber-200 flex flex-col gap-1.5">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span
+                              className={`inline-flex items-center gap-1 text-[10px] uppercase tracking-wider font-bold px-2.5 py-0.5 rounded-sm border ${getPublicationStatusBadgeClass(
+                                prop.publicationStatus
+                              )}`}
+                            >
+                              {prop.publicationStatus === 'pendiente'
+                                ? 'Publicación: En Revisión (Pendiente)'
+                                : prop.publicationStatus === 'aprobada'
+                                ? 'Publicación: Ya Aprobada'
+                                : 'Publicación: Rechazada'}
+                            </span>
+                            {isAgentPending && (
+                              <span className="inline-flex items-center gap-1 text-[10px] uppercase tracking-wider font-bold px-2.5 py-0.5 rounded-sm border bg-amber-200 text-amber-950 border-amber-500">
+                                <Clock className="w-3 h-3" />
+                                Asignación de Agente Pendiente
                               </span>
-                              {isAgentPending && (
-                                <span className="inline-flex items-center gap-1 text-[10px] uppercase tracking-wider font-bold px-2.5 py-0.5 rounded-sm border bg-amber-200 text-amber-950 border-amber-500">
-                                  <Clock className="w-3 h-3" />
-                                  Asignación de Agente Pendiente
-                                </span>
-                              )}
-                              <span className="text-[#173B43]">
-                                Titular: <strong>{prop.ownerName}</strong> · {prop.location}
-                              </span>
-                            </div>
-                            <div className="text-base font-semibold text-[#1F241F]">
-                              {prop.title}
-                            </div>
-                            <div className="text-xs font-tabular font-semibold text-[#173B43]">
-                              {prop.operationType.toUpperCase()} — {prop.currency}{' '}
-                              {prop.price.toLocaleString()} ({prop.surface} m²)
-                            </div>
+                            )}
+                          </div>
+                          <div className="text-xs font-tabular font-bold text-[#173B43]">
+                            {prop.operationType.toUpperCase()} — {prop.currency}{' '}
+                            {prop.price.toLocaleString()} ({prop.surface} m²)
                           </div>
                         </div>
+                        <h3 className="text-base sm:text-lg font-serif-display font-bold text-[#173B43] w-full pt-1">
+                          {prop.title}
+                        </h3>
+                      </div>
 
-                        {/* Botones de aprobación/rechazo de publicación si está pendiente */}
+                      {/* Info principal e imagen */}
+                      <div className="flex flex-col sm:flex-row items-start gap-4">
+                        <img
+                          src={resolvePropertyImageUrl(prop.images[0])}
+                          alt={prop.title}
+                          referrerPolicy="no-referrer"
+                          onError={(e) => {
+                            if (e.currentTarget.src !== HERO_IMAGE) {
+                              e.currentTarget.src = HERO_IMAGE;
+                            }
+                          }}
+                          className="w-24 h-18 rounded-sm object-cover bg-[#D5BFA0] shrink-0 border border-[#D5BFA0]"
+                        />
+                        <div className="space-y-1.5 text-xs text-[#173B43]">
+                          <div>
+                            Titular de la propiedad: <strong>{prop.ownerName}</strong> · Ubicación: {prop.location} ({prop.address})
+                          </div>
+                          <div>
+                            {status === 'sin_agente' && (
+                              <span className="text-[#173B43]">
+                                Modalidad elegida por propietario:{' '}
+                                <strong>Propietario independiente (No solicitó agente)</strong>
+                              </span>
+                            )}
+                            {status === 'pendiente_admin' && (
+                              <span className="text-amber-950 font-bold block">
+                                ⚠️ Acción requerida: El propietario pidió que el Administrador le asigne un agente inmobiliario
+                              </span>
+                            )}
+                            {status === 'pendiente_agente' && (
+                              <span className="text-amber-950 font-bold block">
+                                ⚠️ Acción requerida: El propietario eligió a{' '}
+                                <u>{prop.requestedAgentName || 'un agente'}</u> (podés confirmar la asignación aquí)
+                              </span>
+                            )}
+                            {status === 'asignado' && (
+                              <span className="text-[#173B43] font-semibold block">
+                                ✓ Agente confirmado a cargo: {prop.agentName}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Fila inferior con todos los botones de Acción del CRUD alineados */}
+                      <div className="flex flex-wrap items-center justify-start gap-2.5 pt-3 border-t border-amber-300 w-full">
                         {isPubPending ? (
-                          <div className="flex flex-wrap items-center gap-2">
+                          <>
                             <button
                               type="button"
                               onClick={() => onModerateProperty(prop.id, 'aprobada')}
-                              className="px-4 py-2 text-xs font-bold text-white bg-[#173B43] rounded-sm hover:bg-[#122e35] inline-flex items-center gap-1.5 cursor-pointer"
+                              className="px-4 py-2 text-xs font-bold text-white bg-[#173B43] rounded-sm hover:bg-[#122e35] inline-flex items-center gap-1.5 cursor-pointer shadow-xs"
                             >
                               <Check className="w-3.5 h-3.5" />
                               Aprobar Publicación
@@ -3666,10 +3697,10 @@ export const RoleWorkspaceView: React.FC<RoleWorkspaceViewProps> = ({
                             <button
                               type="button"
                               onClick={() => onSelectProperty(prop)}
-                              className="px-3 py-2 text-xs font-bold text-[#173B43] bg-white border border-[#D5BFA0] rounded-sm inline-flex items-center gap-1.5 cursor-pointer"
+                              className="px-3.5 py-2 text-xs font-bold text-[#173B43] bg-white border border-[#D5BFA0] rounded-sm inline-flex items-center gap-1.5 cursor-pointer hover:bg-amber-50"
                             >
                               <Eye className="w-3.5 h-3.5" />
-                              Revisar ficha
+                              Revisar Ficha
                             </button>
                             <button
                               type="button"
@@ -3677,7 +3708,7 @@ export const RoleWorkspaceView: React.FC<RoleWorkspaceViewProps> = ({
                                 setPropertyToReject(prop);
                                 setRejectionReasonDraft('');
                               }}
-                              className="px-3.5 py-2 text-xs font-bold text-white bg-red-600 rounded-sm hover:bg-red-700 disabled:opacity-50 inline-flex items-center gap-1 cursor-pointer"
+                              className="px-3.5 py-2 text-xs font-bold text-white bg-red-600 rounded-sm hover:bg-red-700 inline-flex items-center gap-1.5 cursor-pointer shadow-xs"
                             >
                               <X className="w-3.5 h-3.5" />
                               Rechazar
@@ -3685,56 +3716,38 @@ export const RoleWorkspaceView: React.FC<RoleWorkspaceViewProps> = ({
                             <button
                               type="button"
                               onClick={() => onDeleteProperty(prop.id)}
-                              className="px-3 py-2 text-xs font-bold text-red-700 bg-white border border-red-300 rounded-sm cursor-pointer"
+                              className="px-3.5 py-2 text-xs font-bold text-red-700 bg-white border border-red-300 rounded-sm hover:bg-red-50 cursor-pointer inline-flex items-center gap-1.5"
                             >
+                              <Trash2 className="w-3.5 h-3.5" />
                               Eliminar
                             </button>
-                          </div>
+                          </>
                         ) : (
-                          <div className="flex flex-wrap items-center gap-2">
+                          <>
                             <div className="text-xs font-semibold text-[#173B43] bg-[#D5BFA0]/30 border border-[#D5BFA0] px-3 py-1.5 rounded-sm">
                               Publicación ya revisada ({prop.publicationStatus.toUpperCase()})
                             </div>
                             <button
                               type="button"
-                              onClick={() => onDeleteProperty(prop.id)}
-                              className="px-3 py-2 text-xs font-bold text-red-700 bg-white border border-red-300 rounded-sm cursor-pointer"
+                              onClick={() => onSelectProperty(prop)}
+                              className="px-3.5 py-2 text-xs font-bold text-[#173B43] bg-white border border-[#D5BFA0] rounded-sm inline-flex items-center gap-1.5 cursor-pointer hover:bg-amber-50"
                             >
+                              <Eye className="w-3.5 h-3.5" />
+                              Revisar Ficha
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => onDeleteProperty(prop.id)}
+                              className="px-3.5 py-2 text-xs font-bold text-red-700 bg-white border border-red-300 rounded-sm hover:bg-red-50 cursor-pointer inline-flex items-center gap-1.5"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
                               Eliminar
                             </button>
-                          </div>
+                          </>
                         )}
-                      </div>
-
-                      {/* Solicitud de Agente en esta propiedad */}
-                      <div className="pt-3 border-t border-amber-300 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
-                        <div>
-                          {status === 'sin_agente' && (
-                            <span className="text-[#173B43]">
-                              Modalidad elegida por propietario:{' '}
-                              <strong>Propietario independiente (No solicitó agente)</strong>
-                            </span>
-                          )}
-                          {status === 'pendiente_admin' && (
-                            <span className="text-amber-950 font-bold">
-                              ⚠️ Acción requerida: El propietario pidió que el Administrador le asigne un agente inmobiliario
-                            </span>
-                          )}
-                          {status === 'pendiente_agente' && (
-                            <span className="text-amber-950 font-bold">
-                              ⚠️ Acción requerida: El propietario eligió a{' '}
-                              <u>{prop.requestedAgentName || 'un agente'}</u> (podés confirmar la asignación aquí)
-                            </span>
-                          )}
-                          {status === 'asignado' && (
-                            <span className="text-[#173B43] font-semibold">
-                              ✓ Agente confirmado a cargo: {prop.agentName}
-                            </span>
-                          )}
-                        </div>
 
                         {isAgentPending && (
-                          <div className="flex flex-wrap items-center gap-2">
+                          <div className="flex flex-wrap items-center gap-2 ml-auto">
                             <select
                               value={selectedAgentUid}
                               onChange={(e) =>
@@ -3743,7 +3756,7 @@ export const RoleWorkspaceView: React.FC<RoleWorkspaceViewProps> = ({
                                   [prop.id]: e.target.value,
                                 }))
                               }
-                              className="px-2.5 py-1.5 text-xs bg-white border border-amber-400 rounded-sm"
+                              className="px-2.5 py-1.5 text-xs bg-white border border-amber-400 rounded-sm text-[#1F241F]"
                             >
                               <option value="">Seleccionar agente...</option>
                               {agentsList.map((ag) => (
@@ -3760,8 +3773,9 @@ export const RoleWorkspaceView: React.FC<RoleWorkspaceViewProps> = ({
                                 onAdminConfirmAgentAssignment(prop.id, ag.uid, ag.displayName);
                               }}
                               disabled={!selectedAgentUid}
-                              className="px-3.5 py-1.5 text-xs font-bold text-white bg-[#173B43] hover:bg-[#122e35] rounded-sm disabled:opacity-50 cursor-pointer"
+                              className="px-3.5 py-1.5 text-xs font-bold text-white bg-[#173B43] hover:bg-[#122e35] rounded-sm disabled:opacity-50 cursor-pointer shadow-xs inline-flex items-center gap-1.5"
                             >
+                              <ShieldCheck className="w-3.5 h-3.5" />
                               Confirmar y Asignar Agente
                             </button>
                           </div>
@@ -3794,107 +3808,121 @@ export const RoleWorkspaceView: React.FC<RoleWorkspaceViewProps> = ({
                   return (
                     <div
                       key={prop.id}
-                      className="p-4 bg-[#F8F6F1] border border-[#D5BFA0] rounded-sm space-y-3"
+                      className="p-5 bg-[#F8F6F1] border border-[#D5BFA0] rounded-sm space-y-4"
                     >
-                      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
-                        <div className="flex items-center gap-3.5">
-                          <img
-                            src={resolvePropertyImageUrl(prop.images[0])}
-                            alt={prop.title}
-                            referrerPolicy="no-referrer"
-                            onError={(e) => {
-                              if (e.currentTarget.src !== HERO_IMAGE) {
-                                e.currentTarget.src = HERO_IMAGE;
-                              }
-                            }}
-                            className="w-16 h-12 rounded-sm object-cover bg-[#D5BFA0] shrink-0"
-                          />
-                          <div className="space-y-1">
-                            <div className="flex flex-wrap items-center gap-2 text-xs">
-                              <span
-                                className={`inline-flex items-center gap-1 text-[10px] uppercase tracking-wider font-bold px-2.5 py-0.5 rounded-sm border ${getPublicationStatusBadgeClass(
-                                  prop.publicationStatus
-                                )}`}
-                              >
-                                {prop.publicationStatus === 'aprobada' ? (
-                                  <>
-                                    <CheckCircle2 className="w-3 h-3" /> APROBADA
-                                  </>
-                                ) : (
-                                  <>
-                                    <XCircle className="w-3 h-3" /> RECHAZADA
-                                  </>
-                                )}
-                              </span>
-                              <span className="text-[#173B43]/80">
-                                Titular: <strong>{prop.ownerName}</strong> · {prop.location}
-                              </span>
-                            </div>
-                            <div className="text-sm font-semibold text-[#1F241F]">{prop.title}</div>
-                            <div className="text-xs font-tabular font-semibold text-[#173B43]">
-                              {prop.operationType.toUpperCase()} — {prop.currency}{' '}
-                              {prop.price.toLocaleString()} ({prop.surface} m²)
-                            </div>
-                            {(prop.publicationStatus === 'rechazada' || prop.publicationStatus === 'suspendida') && prop.rejectionReason && (
-                              <div className="text-xs text-red-700 font-medium">
-                                Motivo de rechazo registrado: “{prop.rejectionReason}”
-                              </div>
+                      {/* Título de la casa en una línea independiente ocupando toda la tarjeta */}
+                      <div className="w-full pb-2.5 border-b border-[#D5BFA0]/60 flex flex-col gap-1.5">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <span
+                            className={`inline-flex items-center gap-1 text-[10px] uppercase tracking-wider font-bold px-2.5 py-0.5 rounded-sm border ${getPublicationStatusBadgeClass(
+                              prop.publicationStatus
+                            )}`}
+                          >
+                            {prop.publicationStatus === 'aprobada' ? (
+                              <>
+                                <CheckCircle2 className="w-3 h-3" /> APROBADA
+                              </>
+                            ) : (
+                              <>
+                                <XCircle className="w-3 h-3" /> RECHAZADA
+                              </>
                             )}
+                          </span>
+                          <div className="text-xs font-tabular font-bold text-[#173B43]">
+                            {prop.operationType.toUpperCase()} — {prop.currency}{' '}
+                            {prop.price.toLocaleString()} ({prop.surface} m²)
                           </div>
                         </div>
+                        <h3 className="text-base sm:text-lg font-serif-display font-bold text-[#173B43] w-full pt-1">
+                          {prop.title}
+                        </h3>
+                      </div>
 
-                        <div className="flex flex-wrap items-center gap-2">
-                          {prop.publicationStatus !== 'aprobada' && (
-                            <button
-                              type="button"
-                              onClick={() => onModerateProperty(prop.id, 'aprobada')}
-                              className="px-3 py-1.5 text-xs font-semibold text-[#173B43] bg-[#D5BFA0]/30 border border-[#173B43] rounded-sm hover:bg-[#D5BFA0]/55"
-                            >
-                              Cambiar a Aprobada
-                            </button>
+                      {/* Info principal e imagen */}
+                      <div className="flex flex-col sm:flex-row items-start gap-4">
+                        <img
+                          src={resolvePropertyImageUrl(prop.images[0])}
+                          alt={prop.title}
+                          referrerPolicy="no-referrer"
+                          onError={(e) => {
+                            if (e.currentTarget.src !== HERO_IMAGE) {
+                              e.currentTarget.src = HERO_IMAGE;
+                            }
+                          }}
+                          className="w-24 h-18 rounded-sm object-cover bg-[#D5BFA0] shrink-0 border border-[#D5BFA0]"
+                        />
+                        <div className="space-y-1.5 text-xs text-[#173B43]">
+                          <div>
+                            Titular: <strong>{prop.ownerName}</strong> · Ubicación: {prop.location} ({prop.address})
+                          </div>
+                          <div>
+                            {status === 'sin_agente' && (
+                              <span className="text-[#173B43]">
+                                Modalidad: <strong>Propietario independiente (Sin agente)</strong>
+                              </span>
+                            )}
+                            {status === 'rechazado' && (
+                              <span className="text-red-700 font-semibold">
+                                El agente anterior rechazó la solicitud. Podés asignarle otro agente:
+                              </span>
+                            )}
+                            {status === 'asignado' && (
+                              <span className="text-[#173B43] font-semibold">
+                                ✓ Agente confirmado a cargo: <strong>{prop.agentName}</strong>
+                              </span>
+                            )}
+                          </div>
+                          {(prop.publicationStatus === 'rechazada' || prop.publicationStatus === 'suspendida') && prop.rejectionReason && (
+                            <div className="text-xs text-red-700 font-medium">
+                              Motivo de rechazo registrado: “{prop.rejectionReason}”
+                            </div>
                           )}
-                          {prop.publicationStatus !== 'rechazada' && (
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setPropertyToReject(prop);
-                                setRejectionReasonDraft('');
-                              }}
-                              className="px-3 py-1.5 text-xs font-semibold text-red-700 bg-red-50 border border-red-300 rounded-sm hover:bg-red-100"
-                            >
-                              Cambiar a Rechazada
-                            </button>
-                          )}
-                          <button
-                            type="button"
-                            onClick={() => onDeleteProperty(prop.id)}
-                            className="px-3 py-1.5 text-xs font-semibold text-red-700 bg-white border border-red-300 rounded-sm hover:bg-red-50"
-                          >
-                            Eliminar
-                          </button>
                         </div>
                       </div>
 
-                      <div className="pt-3 border-t border-[#D5BFA0] flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
-                        <div>
-                          {status === 'sin_agente' && (
-                            <span className="text-[#173B43]/80">
-                              Modalidad: <strong>Propietario independiente (Sin agente)</strong>
-                            </span>
-                          )}
-                          {status === 'rechazado' && (
-                            <span className="text-red-700 font-semibold">
-                              El agente anterior rechazó la solicitud. Podés asignarle otro agente:
-                            </span>
-                          )}
-                          {status === 'asignado' && (
-                            <span className="text-[#173B43] font-semibold">
-                              ✓ Agente confirmado a cargo: <strong>{prop.agentName}</strong>
-                            </span>
-                          )}
-                        </div>
+                      {/* Fila inferior con todos los botones de Acción del CRUD alineados */}
+                      <div className="flex flex-wrap items-center justify-start gap-2.5 pt-3 border-t border-[#D5BFA0] w-full">
+                        <button
+                          type="button"
+                          onClick={() => onSelectProperty(prop)}
+                          className="px-3.5 py-2 text-xs font-bold text-[#173B43] bg-white border border-[#D5BFA0] rounded-sm inline-flex items-center gap-1.5 cursor-pointer hover:bg-amber-50"
+                        >
+                          <Eye className="w-3.5 h-3.5" />
+                          Revisar Ficha
+                        </button>
+                        {prop.publicationStatus !== 'aprobada' && (
+                          <button
+                            type="button"
+                            onClick={() => onModerateProperty(prop.id, 'aprobada')}
+                            className="px-3.5 py-2 text-xs font-bold text-white bg-[#173B43] border border-[#173B43] rounded-sm hover:bg-[#122e35] inline-flex items-center gap-1.5 cursor-pointer shadow-xs"
+                          >
+                            <Check className="w-3.5 h-3.5" />
+                            Cambiar a Aprobada
+                          </button>
+                        )}
+                        {prop.publicationStatus !== 'rechazada' && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setPropertyToReject(prop);
+                              setRejectionReasonDraft('');
+                            }}
+                            className="px-3.5 py-2 text-xs font-bold text-red-700 bg-red-50 border border-red-300 rounded-sm hover:bg-red-100 inline-flex items-center gap-1.5 cursor-pointer"
+                          >
+                            <X className="w-3.5 h-3.5" />
+                            Cambiar a Rechazada
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => onDeleteProperty(prop.id)}
+                          className="px-3.5 py-2 text-xs font-bold text-red-700 bg-white border border-red-300 rounded-sm hover:bg-red-50 cursor-pointer inline-flex items-center gap-1.5"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                          Eliminar
+                        </button>
 
-                        <div className="flex flex-wrap items-center gap-2">
+                        <div className="flex flex-wrap items-center gap-2 ml-auto">
                           <select
                             value={selectedAgentUid}
                             onChange={(e) =>
@@ -3903,7 +3931,7 @@ export const RoleWorkspaceView: React.FC<RoleWorkspaceViewProps> = ({
                                 [prop.id]: e.target.value,
                               }))
                             }
-                            className="px-2.5 py-1.5 text-xs bg-white border border-[#D5BFA0] rounded-sm"
+                            className="px-2.5 py-1.5 text-xs bg-white border border-[#D5BFA0] rounded-sm text-[#1F241F]"
                           >
                             <option value="">Seleccionar agente...</option>
                             {agentsList.map((ag) => (
@@ -3920,9 +3948,10 @@ export const RoleWorkspaceView: React.FC<RoleWorkspaceViewProps> = ({
                               onAdminConfirmAgentAssignment(prop.id, ag.uid, ag.displayName);
                             }}
                             disabled={!selectedAgentUid}
-                            className="px-3 py-1.5 text-xs font-semibold text-[#FCFBF7] bg-[#173B43] hover:bg-[#2c382d] rounded-sm disabled:opacity-50"
+                            className="px-3.5 py-1.5 text-xs font-bold text-white bg-[#173B43] hover:bg-[#122e35] rounded-sm disabled:opacity-50 cursor-pointer shadow-xs inline-flex items-center gap-1.5"
                           >
-                            Reasignar Agente
+                            <ShieldCheck className="w-3.5 h-3.5" />
+                            Asignar / Cambiar Agente
                           </button>
                         </div>
                       </div>
